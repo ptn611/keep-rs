@@ -441,8 +441,12 @@ pub fn subscribe_price_feeds(
                     subscription_id: SubscriptionId(sub_id),
                     params: SubscriptionParams::new(SubscriptionParamsRepr {
                         price_feed_ids: vec![*feed_id],
-                        // drift program requires exponent field to verify the message
-                        properties: vec![PriceFeedProperty::Price, PriceFeedProperty::Exponent],
+                        // drift program requires exponent + feed_update_timestamp to apply the update
+                        properties: vec![
+                            PriceFeedProperty::Price,
+                            PriceFeedProperty::Exponent,
+                            PriceFeedProperty::FeedUpdateTimestamp,
+                        ],
                         delivery_format: DeliveryFormat::Binary,
                         json_binary_encoding: JsonBinaryEncoding::Hex,
                         parsed: false,

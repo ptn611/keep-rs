@@ -4,6 +4,7 @@ use std::sync::Arc;
 mod filler;
 mod http;
 mod liquidator;
+mod relayer;
 mod util;
 
 use crate::{
@@ -37,6 +38,15 @@ pub struct Config {
     /// Run perp filler bot
     #[clap(long, default_value = "true")]
     pub filler: bool,
+    /// Run pyth lazer oracle relayer
+    #[clap(long, default_value = "false")]
+    pub relayer: bool,
+    /// Minimum interval (ms) between oracle updates posted per feed
+    #[clap(long, env = "RELAYER_MIN_INTERVAL_MS", default_value = "1000")]
+    pub relayer_min_interval_ms: u64,
+    /// Initialize the bot's user subaccount (one-shot) and exit
+    #[clap(long, default_value = "false")]
+    pub init_user: bool,
     /// fill for all markets (overrides '--market-ids')
     #[clap(long, default_value = "false")]
     pub all_markets: bool,
@@ -160,13 +170,18 @@ async fn main() {
         }
     });
 
-    if config.liquidator {
+    if config.init_user {
+        relayer::init_user(config, drift).await;
+        return;
+    } else if config.relayer {
+        relayer::run(config, drift).await;
+    } else if config.liquidator {
         let bot = LiquidatorBot::new(config, drift, metrics, dashboard_state).await;
         bot.run().await;
     } else if config.filler {
         let bot = FillerBot::new(config, drift, metrics).await;
         bot.run().await;
     } else {
-        log::warn!("provide --filler or --liquidator mode");
+        log::warn!("provide --filler, --liquidator, or --relayer mode");
     }
 }
