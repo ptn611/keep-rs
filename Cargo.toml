@@ -15,7 +15,7 @@ clap = { version = "4.5.40", "features" = ["env", "derive"] }
 crossbeam = { version = "0.8.4", features = ["crossbeam-channel"] }
 dotenv = "0.15.0"
 drift-rs = { git = "https://github.com/drift-labs/drift-rs", branch = "next", features = ["unsafe_pub", "titan"] }
-drift = { path = "../protocol-v2-shadow/programs/drift", default-features = false, features = ["drift-rs", "mainnet-beta", "no-entrypoint"] }
+drift = { git = "https://github.com/drift-labs/protocol-v2", branch = "next", default-features = false, features = ["drift-rs", "mainnet-beta", "no-entrypoint"] }
 env_logger = "0.11"
 # DLOB 'trace' logs are expensive so compile them out
 log = { version = "0.4", features = ["max_level_trace"] }
