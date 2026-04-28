@@ -4,6 +4,7 @@ use std::sync::Arc;
 mod filler;
 mod http;
 mod liquidator;
+mod quoter;
 mod relayer;
 mod util;
 
@@ -14,6 +15,7 @@ use crate::{
         DashboardStateRef, Metrics,
     },
     liquidator::LiquidatorBot,
+    quoter::QuoterBot,
 };
 use clap::Parser;
 
@@ -38,12 +40,42 @@ pub struct Config {
     /// Run perp filler bot
     #[clap(long, default_value = "true")]
     pub filler: bool,
+    /// Run two-sided quoter bot (posts limits around the oracle on configured markets)
+    #[clap(long, default_value = "false")]
+    pub quoter: bool,
+    /// Half-spread in bps (e.g. 20 = ±0.20% around oracle)
+    #[clap(long, env = "QUOTE_SPREAD_BPS", default_value = "20")]
+    pub quote_spread_bps: u32,
+    /// Interval in seconds between quote refresh ticks
+    #[clap(long, env = "QUOTE_REFRESH_SECS", default_value = "30")]
+    pub quote_refresh_secs: u64,
+    /// Order size in BASE_PRECISION units (1e9 = 1 base unit; default 0.1)
+    #[clap(long, env = "QUOTE_SIZE_BASE", default_value = "100000000")]
+    pub quote_size_base: u64,
+    /// Replace an existing order if its price drifts more than this (bps of oracle)
+    #[clap(long, env = "QUOTE_REFRESH_BPS", default_value = "10")]
+    pub quote_refresh_bps: u32,
+    /// Max |base position| per market in BASE_PRECISION (1e9). If filling a
+    /// side would push |position| past this cap, that side is skipped.
+    /// 0 disables this check.
+    #[clap(long, env = "QUOTE_MAX_BASE_PER_MARKET", default_value = "1000000000")]
+    pub quote_max_base_per_market: u64,
+    /// Max global gross notional (Σ |base_i * oracle_i|) in QUOTE_PRECISION
+    /// (1e6) after a hypothetical fill. To enforce max leverage L on collateral
+    /// C USD, set this to C*L*1_000_000. 0 disables this check.
+    #[clap(long, env = "QUOTE_MAX_GROSS_NOTIONAL", default_value = "0")]
+    pub quote_max_gross_notional: u64,
     /// Run pyth lazer oracle relayer
     #[clap(long, default_value = "false")]
     pub relayer: bool,
     /// Minimum interval (ms) between oracle updates posted per feed
     #[clap(long, env = "RELAYER_MIN_INTERVAL_MS", default_value = "1000")]
     pub relayer_min_interval_ms: u64,
+    /// Comma-separated extra Pyth Lazer feed IDs to subscribe to and relay,
+    /// for clusters whose spot/perp layout doesn't match drift-rs mainnet
+    /// constants (e.g. quote oracle = USDT/USD on a fork).
+    #[clap(long, env = "RELAYER_EXTRA_FEEDS", default_value = "")]
+    pub relayer_extra_feeds: String,
     /// Initialize the bot's user subaccount (one-shot) and exit
     #[clap(long, default_value = "false")]
     pub init_user: bool,
@@ -178,10 +210,13 @@ async fn main() {
     } else if config.liquidator {
         let bot = LiquidatorBot::new(config, drift, metrics, dashboard_state).await;
         bot.run().await;
+    } else if config.quoter {
+        let bot = QuoterBot::new(config, drift).await;
+        bot.run().await;
     } else if config.filler {
         let bot = FillerBot::new(config, drift, metrics).await;
         bot.run().await;
     } else {
-        log::warn!("provide --filler, --liquidator, or --relayer mode");
+        log::warn!("provide --filler, --liquidator, --quoter, or --relayer mode");
     }
 }

@@ -387,6 +387,7 @@ pub fn subscribe_price_feeds(
     mut cli: pyth_lazer_client::LazerClient,
     perp_market_ids: &[MarketId],
     spot_market_ids: &[MarketId],
+    extra_feed_ids: &[u32],
 ) -> tokio::sync::mpsc::Receiver<PythPriceUpdate> {
     let mut feed_id_set = HashSet::new();
 
@@ -401,6 +402,9 @@ pub fn subscribe_price_feeds(
             feed_id_set.insert(fid);
         }
     }
+
+    let extra_feeds: HashSet<u32> = extra_feed_ids.iter().copied().collect();
+    feed_id_set.extend(extra_feeds.iter().copied());
 
     let feed_ids: Vec<PriceFeedId> = feed_id_set.into_iter().map(PriceFeedId).collect();
 
@@ -521,6 +525,35 @@ pub fn subscribe_price_feeds(
                                                     let _ = price_tx.try_send(PythPriceUpdate {
                                                         market_type: MarketType::Spot,
                                                         market_id,
+                                                        feed_id,
+                                                        price: scaled_price,
+                                                        message: buf.clone(),
+                                                        ts: data.timestamp_us,
+                                                    });
+                                                }
+
+                                                // Extra feeds (cluster-specific): emit a synthetic
+                                                // update so the relayer ships them. drift-rs
+                                                // derives the oracle PDA from feed_id alone, so
+                                                // market_id is informational only.
+                                                if extra_feeds.contains(&feed_id)
+                                                    && pyth_lazer_feed_id_to_perp_market_index(
+                                                        feed_id,
+                                                    )
+                                                    .is_none()
+                                                    && pyth_lazer_feed_id_to_spot_market_index(
+                                                        feed_id,
+                                                    )
+                                                    .is_none()
+                                                {
+                                                    let scaled_price = to_price_precision(
+                                                        price,
+                                                        feed_id,
+                                                        MarketType::Spot,
+                                                    );
+                                                    let _ = price_tx.try_send(PythPriceUpdate {
+                                                        market_type: MarketType::Spot,
+                                                        market_id: u16::MAX,
                                                         feed_id,
                                                         price: scaled_price,
                                                         message: buf.clone(),

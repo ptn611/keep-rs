@@ -48,11 +48,17 @@ pub async fn run(config: Config, drift: DriftClient) {
     };
 
     let min_interval = Duration::from_millis(config.relayer_min_interval_ms);
+    let extra_feeds: Vec<u32> = config
+        .relayer_extra_feeds
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
     log::info!(
         target: TARGET,
-        "starting: perp_markets={} spot_markets={} min_interval={:?} dry={}",
+        "starting: perp_markets={} spot_markets={} extra_feeds={:?} min_interval={:?} dry={}",
         perp_market_ids.len(),
         spot_market_ids.len(),
+        extra_feeds,
         min_interval,
         config.dry,
     );
@@ -63,8 +69,12 @@ pub async fn run(config: Config, drift: DriftClient) {
         pyth_access_token.as_str(),
     )
     .expect("pyth lazer client connects");
-    let mut feed =
-        crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &spot_market_ids);
+    let mut feed = crate::util::subscribe_price_feeds(
+        pyth_feed_cli,
+        &perp_market_ids,
+        &spot_market_ids,
+        &extra_feeds,
+    );
 
     drift
         .subscribe_blockhashes()

@@ -643,9 +643,14 @@ impl LiquidatorBot {
         .expect("pyth price feed connects");
 
         let pyth_price_feed: tokio::sync::mpsc::Receiver<_> = if config.use_spot_liquidation {
-            crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &spot_market_ids)
+            crate::util::subscribe_price_feeds(
+                pyth_feed_cli,
+                &perp_market_ids,
+                &spot_market_ids,
+                &[],
+            )
         } else {
-            crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &[])
+            crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &[], &[])
         };
 
         log::info!(target: TARGET, "subscribed pyth price feeds");
