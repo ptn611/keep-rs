@@ -246,7 +246,7 @@ impl FillerBot {
                                     }
                                 }
                                 OrderType::Limit => {
-                                    match order.get_limit_price(Some(oracle_price), Some(vamm_price), slot + 1, perp_market.price_tick(), None) {
+                                    match order.get_limit_price(Some(oracle_price), Some(vamm_price), slot + 1, perp_market.price_tick()) {
                                         Ok(Some(p)) => p,
                                         _ => {
                                             log::warn!(target: TARGET, "could not get limit price: {order_params:?}, skipping...");

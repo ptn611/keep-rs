@@ -2161,7 +2161,7 @@ impl PrimaryLiquidationStrategy {
                 let perp_market = state.perp_market(pos.market_index)?;
                 let oracle = state.perp_oracle(pos.market_index)?;
 
-                if pos.base_asset_amount == 0 && pos.quote_asset_amount != 0 && pos.lp_shares == 0 {
+                if pos.base_asset_amount == 0 && pos.quote_asset_amount != 0 {
                     let _usdc = state.spot_market(0)?;
 
                     let claimable_pnl_available: i128 = match pos.get_claimable_pnl(oracle.price, 0)
