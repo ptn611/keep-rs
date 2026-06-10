@@ -18,34 +18,32 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 use drift_rs::{
     dlob::{DLOBNotifier, DLOB},
-    ffi::{calculate_claimable_pnl, OraclePriceData, SimplifiedMarginCalculation},
     grpc::{
         grpc_subscriber::{AccountFilter, GrpcConnectionOpts},
         TransactionUpdate,
     },
     jupiter::SwapMode,
-    market_state::MarketStateData,
+    market_state::{MarketStateData, SimplifiedMarginCalculation},
     math::{
         constants::{
             BASE_PRECISION, MARGIN_PRECISION_U128, PRICE_PRECISION, QUOTE_PRECISION,
             SPOT_WEIGHT_PRECISION_U128,
         },
         liquidation::{calculate_collateral, CollateralInfo},
-        tiers::perp_tier_is_as_safe_as,
+        tiers::{perp_tier_is_as_safe_as, AssetTierExt, ContractTierExt},
     },
     priority_fee_subscriber::PriorityFeeSubscriber,
     titan,
     types::{
         accounts::{PerpMarket, SpotMarket, User},
-        MarginRequirementType, MarketId, MarketStatus, MarketType, OracleSource, OrderParams,
-        OrderType, PerpPosition, PositionDirection, SpotBalanceType, SpotPosition,
+        MarginRequirementType, MarketId, MarketStatus, MarketType, OraclePriceData, OracleSource,
+        OrderParams, OrderType, PerpPosition, PositionDirection, SpotBalanceType, SpotPosition,
     },
     DriftClient, GrpcSubscribeOpts, MarketState, Pubkey, TransactionBuilder,
 };
 use drift_rs::{jupiter::JupiterSwapApi, titan::TitanSwapApi};
-use solana_sdk::{
-    account::Account, clock::Slot, compute_budget::ComputeBudgetInstruction, signature::Signature,
-};
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_sdk::{account::Account, clock::Slot, signature::Signature};
 
 use crate::{
     filler::{TxSender, TxWorker},
@@ -645,9 +643,14 @@ impl LiquidatorBot {
         .expect("pyth price feed connects");
 
         let pyth_price_feed: tokio::sync::mpsc::Receiver<_> = if config.use_spot_liquidation {
-            crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &spot_market_ids)
+            crate::util::subscribe_price_feeds(
+                pyth_feed_cli,
+                &perp_market_ids,
+                &spot_market_ids,
+                &[],
+            )
         } else {
-            crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &[])
+            crate::util::subscribe_price_feeds(pyth_feed_cli, &perp_market_ids, &[], &[])
         };
 
         log::info!(target: TARGET, "subscribed pyth price feeds");
@@ -1590,7 +1593,7 @@ async fn setup_grpc(
             std::env::var("GRPC_X_TOKEN").expect("GRPC_X_TOKEN set"),
             GrpcSubscribeOpts::default()
                 .connection_opts(GrpcConnectionOpts::default().enable_compression())
-                .commitment(solana_sdk::commitment_config::CommitmentLevel::Processed)
+                .commitment(solana_commitment_config::CommitmentLevel::Processed)
                 .transaction_include_accounts(vec![drift.wallet().default_sub_account()])
                 .on_transaction(on_transaction_update_fn(transaction_tx.clone()))
                 .on_slot(on_slot_update_fn(
@@ -1605,10 +1608,10 @@ async fn setup_grpc(
                     {
                         let tx = tx.clone();
                         move |acc| {
-                            let user: &User = drift_rs::utils::deser_zero_copy(acc.data);
+                            let user = drift_rs::utils::deser_zero_copy::<User>(acc.data);
                             if let Err(err) = tx.try_send(GrpcEvent::UserUpdate {
                                 pubkey: acc.pubkey,
-                                user: user.clone(),
+                                user,
                                 slot: acc.slot,
                             }) {
                                 log::error!(target: TARGET, "failed to forward user update event: {err:?}");
@@ -1621,9 +1624,9 @@ async fn setup_grpc(
                     {
                         let tx = tx.clone();
                         move |acc| {
-                            let market: &PerpMarket = drift_rs::utils::deser_zero_copy(&acc.data);
+                            let market = drift_rs::utils::deser_zero_copy::<PerpMarket>(&acc.data);
                             if let Err(err) = tx.try_send(GrpcEvent::PerpMarketUpdate {
-                                market: market.clone(),
+                                market,
                                 slot: acc.slot,
                             }) {
                                 log::error!(target: TARGET, "failed to forward perp market update event: {err:?}");
@@ -1636,9 +1639,9 @@ async fn setup_grpc(
                     {
                         let tx = tx.clone();
                         move |acc| {
-                            let market: &SpotMarket = drift_rs::utils::deser_zero_copy(acc.data);
+                            let market = drift_rs::utils::deser_zero_copy::<SpotMarket>(acc.data);
                             if let Err(err) = tx.try_send(GrpcEvent::SpotMarketUpdate {
-                                market: market.clone(),
+                                market,
                                 slot: acc.slot,
                             }) {
                                 log::error!(target: TARGET, "failed to forward spot market update event: {err:?}");
@@ -1655,18 +1658,22 @@ async fn setup_grpc(
                         let lamports = acc.lamports;
                         let slot = acc.slot;
                         for (market, oracle_source) in oracle_markets {
-                            let oracle_price_data = drift_rs::ffi::get_oracle_price(
-                                *oracle_source,
-                                &mut (
-                                    acc.pubkey,
-                                    Account {
-                                        owner: acc.owner,
-                                        data: acc.data.to_vec(),
-                                        lamports,
-                                        executable: false,
-                                        rent_epoch: u64::MAX,
-                                    },
-                                ),
+                            let mut data = acc.data.to_vec();
+                            let mut lamports = lamports;
+                            let owner = acc.owner;
+                            let pubkey = acc.pubkey;
+                            let account_info = anchor_lang::prelude::AccountInfo::new(
+                                &pubkey,
+                                false,
+                                false,
+                                &mut lamports,
+                                &mut data,
+                                &owner,
+                                false,
+                            );
+                            let oracle_price_data = drift::state::oracle::get_oracle_price(
+                                oracle_source,
+                                &account_info,
                                 slot,
                             )
                             .unwrap();
@@ -1945,14 +1952,13 @@ impl PrimaryLiquidationStrategy {
     ) -> Option<u128> {
         let state = market_state.read().unwrap().load();
 
-        let perp_market = state.perp_markets.get(&market_index)?;
-        let oracle = state.perp_oracle_prices.get(&market_index)?;
+        let perp_market = state.perp_market(market_index)?;
+        let oracle = state.perp_oracle(market_index)?;
 
         let margin_ratio = perp_market
             .get_margin_ratio(
                 base_asset_amount.unsigned_abs() as u128,
                 MarginRequirementType::Initial,
-                false,
             )
             .ok()?;
 
@@ -1976,23 +1982,20 @@ impl PrimaryLiquidationStrategy {
 
         let (liability_oracle, liability_precision) = if liability.market_type == MarketType::Spot {
             let oracle = state
-                .spot_oracle_prices
-                .get(&liability.market_index)
+                .spot_oracle(liability.market_index)
                 .expect("liability oracle");
             let market = state
-                .spot_markets
-                .get(&liability.market_index)
+                .spot_market(liability.market_index)
                 .expect("liability market");
             (oracle.price, 10_u128.pow(market.decimals))
         } else {
-            let oracle = state.spot_oracle_prices.get(&0).expect("USDC oracle");
+            let oracle = state.spot_oracle(0).expect("USDC oracle");
             (oracle.price, QUOTE_PRECISION)
         };
 
         let liability_weight = if liability.market_type == MarketType::Spot {
             let market = state
-                .spot_markets
-                .get(&liability.market_index)
+                .spot_market(liability.market_index)
                 .expect("liability spot market");
             market.initial_liability_weight as u128
         } else {
@@ -2000,24 +2003,17 @@ impl PrimaryLiquidationStrategy {
         };
 
         let (asset_oracle, asset_precision) = if asset.market_type == MarketType::Spot {
-            let oracle = state
-                .spot_oracle_prices
-                .get(&asset.market_index)
-                .expect("asset oracle");
-            let market = state
-                .spot_markets
-                .get(&asset.market_index)
-                .expect("asset market");
+            let oracle = state.spot_oracle(asset.market_index).expect("asset oracle");
+            let market = state.spot_market(asset.market_index).expect("asset market");
             (oracle.price, 10_u128.pow(market.decimals))
         } else {
-            let oracle = state.spot_oracle_prices.get(&0).expect("USDC oracle");
+            let oracle = state.spot_oracle(0).expect("USDC oracle");
             (oracle.price, QUOTE_PRECISION)
         };
 
         let (asset_weight, asset_weight_precision) = if asset.market_type == MarketType::Spot {
             let market = state
-                .spot_markets
-                .get(&asset.market_index)
+                .spot_market(asset.market_index)
                 .expect("asset spot market");
             (
                 market.initial_asset_weight as u128,
@@ -2162,23 +2158,23 @@ impl PrimaryLiquidationStrategy {
             .iter()
             .filter(|p| p.base_asset_amount != 0 || p.quote_asset_amount != 0)
             .filter_map(|pos| {
-                let perp_market = state.perp_markets.get(&pos.market_index)?;
-                let oracle = state.perp_oracle_prices.get(&pos.market_index)?;
+                let perp_market = state.perp_market(pos.market_index)?;
+                let oracle = state.perp_oracle(pos.market_index)?;
 
-                if pos.base_asset_amount == 0 && pos.quote_asset_amount != 0 && pos.lp_shares == 0 {
-                    let usdc = state.spot_markets.get(&0)?;
+                if pos.base_asset_amount == 0 && pos.quote_asset_amount != 0 {
+                    let _usdc = state.spot_market(0)?;
 
-                    let claimable_pnl_available =
-                        match calculate_claimable_pnl(perp_market, usdc, pos, oracle.price) {
-                            Ok(pnl) => pnl.abs(),
-                            Err(_) => 0,
-                        };
+                    let claimable_pnl_available: i128 = match pos.get_claimable_pnl(oracle.price, 0)
+                    {
+                        Ok(pnl) => pnl.abs(),
+                        Err(_) => 0,
+                    };
 
                     Some(PositionInfo {
                         market_type: MarketType::Perp,
                         market_index: pos.market_index,
                         is_asset: claimable_pnl_available > 0,
-                        collateral_required: claimable_pnl_available as i128,
+                        collateral_required: claimable_pnl_available,
                         base_amount: 0,
                         quote_amount: pos.quote_asset_amount,
                     })
@@ -2187,7 +2183,6 @@ impl PrimaryLiquidationStrategy {
                         .get_margin_ratio(
                             pos.base_asset_amount.unsigned_abs() as u128,
                             MarginRequirementType::Initial,
-                            false,
                         )
                         .ok()?;
 
@@ -2223,8 +2218,8 @@ impl PrimaryLiquidationStrategy {
             .iter()
             .filter(|p| !p.is_available())
             .filter_map(|pos| {
-                let spot_market = state.spot_markets.get(&pos.market_index)?;
-                let oracle = state.spot_oracle_prices.get(&pos.market_index)?;
+                let spot_market = state.spot_market(pos.market_index)?;
+                let oracle = state.spot_oracle(pos.market_index)?;
 
                 let token_amount = pos.get_signed_token_amount(&spot_market).ok()?;
 
@@ -2321,7 +2316,7 @@ impl PrimaryLiquidationStrategy {
             if liability.market_type == MarketType::Spot {
                 true
             } else {
-                match state.perp_markets.get(&liability.market_index) {
+                match state.perp_market(liability.market_index) {
                     Some(perp_market) => perp_tier_is_as_safe_as(
                         perp_market.contract_tier.to_number(),
                         safest_perp_tier,
@@ -2870,7 +2865,7 @@ impl PrimaryLiquidationStrategy {
             let spot_market = {
                 let state = market_state.read().unwrap();
                 let state_data = state.load();
-                match state_data.spot_markets.get(&pos.market_index) {
+                match state_data.spot_market(pos.market_index) {
                     Some(m) => *m,
                     None => continue,
                 }
@@ -3127,7 +3122,7 @@ impl PrimaryLiquidationStrategy {
             &liquidatee_account,
             liability.market_index,
             asset.market_index,
-            drift_rs::types::u128::from(liq_amount),
+            u128::from(liq_amount),
             None,
         );
 
@@ -3289,7 +3284,7 @@ impl PrimaryLiquidationStrategy {
             &liquidatee_account,
             asset.market_index,
             liability.market_index,
-            drift_rs::types::u128::from(liq_amount),
+            u128::from(liq_amount),
             None,
         );
 

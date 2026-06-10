@@ -4,9 +4,9 @@ use clap::Parser;
 use drift_rs::event_subscriber::DriftEvent;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::config::RpcTransactionConfig;
-use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 
