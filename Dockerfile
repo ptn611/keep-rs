@@ -16,10 +16,16 @@ RUN SO_URL=$(curl -s https://api.github.com/repos/drift-labs/drift-ffi-sys/relea
     curl -L -o libdrift_ffi_sys.so "$SO_URL" &&\
     cp libdrift_ffi_sys.so $CARGO_DRIFT_FFI_PATH
 
-# 2. Copy actual code and rebuild
-# TODO: docker layer cache
-# RUN cargo build --release && rm -rf src
-COPY . .
+# 2. Copy actual code and build.
+# protocol-v2-shadow (the `drift` crate) and drift-rs are consumed as path-dep
+# siblings of keep-rs. The build context is the parent dir holding all three;
+# CI checks them out side by side (see .github/workflows). Preserve the
+# relative layout so Cargo's `../drift-rs` / `../protocol-v2-shadow` resolve.
+COPY protocol-v2-shadow ./protocol-v2-shadow
+COPY drift-rs ./drift-rs
+COPY keep-rs ./keep-rs
+
+WORKDIR /app/keep-rs
 RUN cargo build --release
 
 # ---- Runtime Stage ----
@@ -27,8 +33,8 @@ FROM debian:bookworm-slim
 # RUN apt-get update && apt-get install -y ca-certificates lldb
 RUN apt-get update && apt-get install -y ca-certificates
 COPY --from=builder /usr/local/lib/libdrift_ffi_sys.so /lib/
-# COPY --from=builder /app/target/release/keeprs /usr/local/bin/keeprs-real
-COPY --from=builder /app/target/release/keeprs /usr/local/bin/keeprs
+# COPY --from=builder /app/keep-rs/target/release/keeprs /usr/local/bin/keeprs-real
+COPY --from=builder /app/keep-rs/target/release/keeprs /usr/local/bin/keeprs
 
 # RUN echo '#!/bin/bash\nexec lldb -o "run" -o "bt all" -o "quit" -- /usr/local/bin/keeprs-real "$@"' > /usr/local/bin/keeprs && \
 #     chmod +x /usr/local/bin/keeprs

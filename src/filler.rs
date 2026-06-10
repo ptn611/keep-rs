@@ -230,9 +230,23 @@ impl FillerBot {
 
                             let reserve_price = perp_market.amm.reserve_price().unwrap_or(0);
                             let vamm_price = if order_params.direction == PositionDirection::Long {
-                                perp_market.amm.ask_price(reserve_price).unwrap_or(0)
+                                perp_market
+                                    .amm
+                                    .ask_price(
+                                        reserve_price,
+                                        perp_market.amm.long_spread,
+                                        perp_market.amm.reference_price_offset,
+                                    )
+                                    .unwrap_or(0)
                             } else {
-                                perp_market.amm.bid_price(reserve_price).unwrap_or(0)
+                                perp_market
+                                    .amm
+                                    .bid_price(
+                                        reserve_price,
+                                        perp_market.amm.short_spread,
+                                        perp_market.amm.reference_price_offset,
+                                    )
+                                    .unwrap_or(0)
                             };
 
                             let price = match order_params.order_type {
@@ -324,7 +338,7 @@ impl FillerBot {
 
                         let perp_market = drift.try_get_perp_market_account(market_index).expect("got perp market");
                         let chain_oracle_data = drift.try_get_mmoracle_for_perp_market(market_index, slot).expect("got oracle price");
-                        log::debug!(target: "oracle", "oracle price: delay:{:?},market:{:?},oracle:{:?},amm:{:?}", chain_oracle_data.delay, market, chain_oracle_data.price, perp_market.amm.mm_oracle_price);
+                        log::debug!(target: "oracle", "oracle price: delay:{:?},market:{:?},oracle:{:?},amm:{:?}", chain_oracle_data.delay, market, chain_oracle_data.price, perp_market.market_stats.mm_oracle_price);
                         let oracle_stale_for_amm = chain_oracle_data.delay > slots_before_stale_for_amm;
                         log::debug!(target: TARGET, "oracle_stale_for_amm={} (delay={}, market={})", oracle_stale_for_amm, chain_oracle_data.delay, market_index);
                         let mut oracle_price = chain_oracle_data.price as u64;
@@ -353,7 +367,7 @@ impl FillerBot {
                                 pyth_update,
                                 trigger_price,
                                 move |maker_cross| {
-                                    perp_market.has_too_much_drawdown().unwrap_or(false) && amm_wants_to_jit_make(&perp_market.amm, maker_cross.taker_direction)
+                                    perp_market.has_too_much_drawdown().unwrap_or(false) && amm_wants_to_jit_make(&perp_market.amm, perp_market.order_step_size, maker_cross.taker_direction)
                                 },
                                 perp_market,
                                 oracle_stale_for_amm,
@@ -697,11 +711,11 @@ async fn try_auction_fill(
                 {
                     // if user position is less than min order size, step size is the threshold
                     let amm_size_threshold = if !taker_order.is_reduce_only()
-                        && pos.base_asset_amount.unsigned_abs() > perp_market.amm.min_order_size
+                        && pos.base_asset_amount.unsigned_abs() > perp_market.market_stats.min_order_size
                     {
-                        perp_market.amm.min_order_size
+                        perp_market.market_stats.min_order_size
                     } else {
-                        perp_market.amm.order_step_size
+                        perp_market.order_step_size
                     };
                     if base_asset_amount < amm_size_threshold {
                         log::info!(target: TARGET, "skip vamm cross too small: {crosses:?}");
@@ -895,10 +909,14 @@ async fn try_uncross(
     }
 }
 
-fn amm_wants_to_jit_make(amm: &AMM, taker_direction: PositionDirection) -> bool {
+fn amm_wants_to_jit_make(
+    amm: &AMM,
+    order_step_size: u64,
+    taker_direction: PositionDirection,
+) -> bool {
     let amm_wants_to_jit_make = match taker_direction {
-        PositionDirection::Long => amm.base_asset_amount_with_amm < -(amm.order_step_size as i128),
-        PositionDirection::Short => amm.base_asset_amount_with_amm > amm.order_step_size as i128,
+        PositionDirection::Long => amm.base_asset_amount_with_amm < -(order_step_size as i128),
+        PositionDirection::Short => amm.base_asset_amount_with_amm > order_step_size as i128,
     };
     amm_wants_to_jit_make && amm.amm_jit_intensity > 0
 }

@@ -6,6 +6,18 @@ on:
       - master
       - mainnet-beta
 
+defaults:
+  run:
+    working-directory: ./keep-rs
+
+env:
+  CARGO_DRIFT_FFI_PATH: /usr/local/lib
+  # `drift-rs` and the `drift` crate (protocol-v2-shadow) are consumed as path
+  # deps on siblings of this repo (see Cargo.toml). These refs pin which
+  # commits CI builds against.
+  DRIFT_RS_REF: next
+  SHADOW_REF: master
+
 jobs:
   build_and_test:
     runs-on: ubicloud
@@ -14,12 +26,27 @@ jobs:
     strategy:
       matrix:
         task: ["build", "test"]
-    env:
-      CARGO_DRIFT_FFI_PATH: /usr/local/lib
     steps:
       # Common steps
-      - name: Checkout main
-        uses: actions/checkout@v3
+      - name: Checkout keep-rs
+        uses: actions/checkout@v4
+        with:
+          path: keep-rs
+
+      - name: Checkout drift-rs
+        uses: actions/checkout@v4
+        with:
+          repository: drift-labs/drift-rs
+          ref: ${{ env.DRIFT_RS_REF }}
+          path: drift-rs
+
+      - name: Checkout protocol-v2-shadow
+        uses: actions/checkout@v4
+        with:
+          repository: drift-labs/protocol-v2-shadow
+          ref: ${{ env.SHADOW_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: protocol-v2-shadow
 
       - name: Install OS dependencies
         run: apt-get update && apt-get install -y git cmake jq

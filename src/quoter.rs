@@ -83,7 +83,7 @@ impl QuoterBot {
                 target: TARGET,
                 "perp {idx}: pda={} oracle={}",
                 pm.pubkey,
-                pm.amm.oracle,
+                pm.oracle,
             );
         }
         let subaccount = drift.wallet.sub_account(config.sub_account_id);
@@ -252,7 +252,7 @@ impl QuoterBot {
             .get_perp_market_account(market_index)
             .await
             .map_err(|e| format!("perp market: {e:?}"))?;
-        let tick_size = perp_market.amm.order_tick_size.max(1);
+        let tick_size = perp_market.order_tick_size.max(1);
         let spread = self.config.quote_spread_bps as u64;
         let bid_raw = oracle_price.saturating_sub(oracle_price * spread / 10_000);
         let ask_raw = oracle_price + oracle_price * spread / 10_000;

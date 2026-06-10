@@ -3,12 +3,35 @@ on:
   push:
     branches: [master]
 
+env:
+  # drift-rs + protocol-v2-shadow (the `drift` crate) are path-dep siblings of
+  # keep-rs; the docker build context is the parent dir holding all three.
+  DRIFT_RS_REF: next
+  SHADOW_REF: master
+
 jobs:
   build:
     runs-on: ubicloud
     steps:
-      - name: Checkout Code
+      - name: Checkout keep-rs
         uses: actions/checkout@v3
+        with:
+          path: keep-rs
+
+      - name: Checkout drift-rs
+        uses: actions/checkout@v3
+        with:
+          repository: drift-labs/drift-rs
+          ref: ${{ env.DRIFT_RS_REF }}
+          path: drift-rs
+
+      - name: Checkout protocol-v2-shadow
+        uses: actions/checkout@v3
+        with:
+          repository: drift-labs/protocol-v2-shadow
+          ref: ${{ env.SHADOW_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: protocol-v2-shadow
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@master
@@ -35,6 +58,7 @@ jobs:
           BRANCH_NAME: ${{ github.ref_name }}
         with:
           context: .
+          file: keep-rs/Dockerfile
           push: true
           tags: |
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}-${{ env.BRANCH_NAME }}
