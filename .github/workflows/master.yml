@@ -1,7 +1,7 @@
 name: Build Image And Deploy
 on:
   push:
-    branches: [master]
+    branches: [master, next]
 
 env:
   # drift-rs + protocol-v2-shadow (the `drift` crate) are path-dep siblings of
@@ -65,6 +65,9 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest-${{ env.BRANCH_NAME }}
 
   deploy:
+    # next only publishes the ECR image (tagged *-next); the EKS rollout
+    # restart runs for master.
+    if: github.ref_name == 'master'
     runs-on: ubicloud
     needs: [build]
     steps:
