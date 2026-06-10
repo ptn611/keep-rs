@@ -14,19 +14,19 @@ jobs:
     runs-on: ubicloud
     steps:
       - name: Checkout keep-rs
-        uses: actions/checkout@v3
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           path: keep-rs
 
       - name: Checkout drift-rs
-        uses: actions/checkout@v3
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: drift-labs/drift-rs
           ref: ${{ env.DRIFT_RS_REF }}
           path: drift-rs
 
       - name: Checkout protocol-v2-shadow
-        uses: actions/checkout@v3
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: drift-labs/protocol-v2-shadow
           ref: ${{ env.SHADOW_REF }}
@@ -34,7 +34,7 @@ jobs:
           path: protocol-v2-shadow
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@master
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_NON_PROD }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY_NON_PROD }}
@@ -42,15 +42,15 @@ jobs:
 
       - name: Log in to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@19d944daaa35f0fa1d3f7f8af1d3f2e5de25c5b7 # v2.1.4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           version: v0.10.0
 
       - name: Docker build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: keep-rs
@@ -65,21 +65,18 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest-${{ env.BRANCH_NAME }}
 
   deploy:
-    # next only publishes the ECR image (tagged *-next); the EKS rollout
-    # restart runs for master.
-    if: github.ref_name == 'master'
     runs-on: ubicloud
     needs: [build]
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@master
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_NON_PROD }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY_NON_PROD }}
           aws-region: ${{ secrets.EKS_NON_PROD_REGION }}
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8 # v3.2
         with:
           version: "v1.30.0"
 
