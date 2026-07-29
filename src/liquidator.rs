@@ -43,7 +43,7 @@ use drift_rs::{
 };
 use drift_rs::{jupiter::JupiterSwapApi, titan::TitanSwapApi};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_sdk::{account::Account, clock::Slot, signature::Signature};
+use solana_sdk::{clock::Slot, signature::Signature};
 
 use crate::{
     filler::{TxSender, TxWorker},
@@ -1904,10 +1904,10 @@ impl PrimaryLiquidationStrategy {
     /// Liquidation policy: Prefer takeover for small positions, use makers for large positions,
     /// fallback to takeover when no makers available. Skip if no makers and insufficient collateral.
     fn decide_perp_method(
-        quote_asset_amount: u64,
-        collateral_available: u128,
-        collateral_required: u128,
-        has_makers: bool,
+        _quote_asset_amount: u64,
+        _collateral_available: u128,
+        _collateral_required: u128,
+        _has_makers: bool,
     ) -> LiquidationType {
         // const POSITION_AMOUNT_THRESHOLD: u64 = 5_000 * QUOTE_PRECISION_U64;
 
