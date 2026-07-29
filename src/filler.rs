@@ -24,8 +24,8 @@ use drift_rs::{
     types::{
         accounts::{PerpMarket, User, UserStats},
         CommitmentConfig, FeeTier, MarketId, MarketPrecision, MarketStatus, MarketType, Order,
-        OrderParamsExt, OrderTriggerCondition, OrderType, PositionDirection, PostOnlyParam,
-        RpcSendTransactionConfig, StateExt, VersionedMessage, VersionedTransaction, AMM,
+        OrderTriggerCondition, OrderType, PositionDirection, PostOnlyParam,
+        RpcSendTransactionConfig, VersionedMessage, VersionedTransaction, AMM,
     },
     DriftClient, GrpcSubscribeOpts, Pubkey, TransactionBuilder, Wallet,
 };
@@ -228,24 +228,14 @@ impl FillerBot {
                                 ..Default::default()
                             };
 
-                            let reserve_price = perp_market.amm.reserve_price().unwrap_or(0);
+                            let reserve_price = perp_market.reserve_price().unwrap_or(0);
                             let vamm_price = if order_params.direction == PositionDirection::Long {
                                 perp_market
-                                    .amm
-                                    .ask_price(
-                                        reserve_price,
-                                        perp_market.amm.long_spread,
-                                        perp_market.amm.reference_price_offset,
-                                    )
+                                    .ask_price(reserve_price, perp_market.amm.long_spread, perp_market.amm.reference_price_offset)
                                     .unwrap_or(0)
                             } else {
                                 perp_market
-                                    .amm
-                                    .bid_price(
-                                        reserve_price,
-                                        perp_market.amm.short_spread,
-                                        perp_market.amm.reference_price_offset,
-                                    )
+                                    .bid_price(reserve_price, perp_market.amm.short_spread, perp_market.amm.reference_price_offset)
                                     .unwrap_or(0)
                             };
 

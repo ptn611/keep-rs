@@ -18,32 +18,35 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 use drift_rs::{
     dlob::{DLOBNotifier, DLOB},
+    ffi::{OraclePriceData, SimplifiedMarginCalculation},
     grpc::{
         grpc_subscriber::{AccountFilter, GrpcConnectionOpts},
         TransactionUpdate,
     },
     jupiter::SwapMode,
-    market_state::{MarketStateData, SimplifiedMarginCalculation},
+    market_state::MarketStateData,
     math::{
         constants::{
             BASE_PRECISION, MARGIN_PRECISION_U128, PRICE_PRECISION, QUOTE_PRECISION,
             SPOT_WEIGHT_PRECISION_U128,
         },
         liquidation::{calculate_collateral, CollateralInfo},
-        tiers::{perp_tier_is_as_safe_as, AssetTierExt, ContractTierExt},
+        tiers::perp_tier_is_as_safe_as,
     },
     priority_fee_subscriber::PriorityFeeSubscriber,
     titan,
     types::{
         accounts::{PerpMarket, SpotMarket, User},
-        MarginRequirementType, MarketId, MarketStatus, MarketType, OraclePriceData, OracleSource,
-        OrderParams, OrderType, PerpPosition, PositionDirection, SpotBalanceType, SpotPosition,
+        MarginRequirementType, MarketId, MarketStatus, MarketType, OrderParams, OrderType,
+        PerpPosition, PositionDirection, SpotBalanceType, SpotPosition,
     },
-    DriftClient, GrpcSubscribeOpts, MarketState, Pubkey, TransactionBuilder,
+    DriftClient, GrpcSubscribeOpts, Pubkey, TransactionBuilder,
 };
 use drift_rs::{jupiter::JupiterSwapApi, titan::TitanSwapApi};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_sdk::{clock::Slot, signature::Signature};
+use solana_program::sysvar
+use solana_slot_history::Slot;
+use solana_sdk::signature::Signature;
 
 use crate::{
     filler::{TxSender, TxWorker},
@@ -1952,8 +1955,8 @@ impl PrimaryLiquidationStrategy {
     ) -> Option<u128> {
         let state = market_state.read().unwrap().load();
 
-        let perp_market = state.perp_market(market_index)?;
-        let oracle = state.perp_oracle(market_index)?;
+        let perp_market = state.perp_markets.get(&market_index)?;
+        let oracle = state.perp_oracle_prices.get(&market_index).copied()?;
 
         let margin_ratio = perp_market
             .get_margin_ratio(
@@ -1989,7 +1992,7 @@ impl PrimaryLiquidationStrategy {
                 .expect("liability market");
             (oracle.price, 10_u128.pow(market.decimals))
         } else {
-            let oracle = state.spot_oracle(0).expect("USDC oracle");
+            let oracle = state.spot_oracle_prices.get(&0).copied().expect("USDC oracle");
             (oracle.price, QUOTE_PRECISION)
         };
 
@@ -2003,11 +2006,11 @@ impl PrimaryLiquidationStrategy {
         };
 
         let (asset_oracle, asset_precision) = if asset.market_type == MarketType::Spot {
-            let oracle = state.spot_oracle(asset.market_index).expect("asset oracle");
-            let market = state.spot_market(asset.market_index).expect("asset market");
+            let oracle = state.spot_oracle_prices.get(&asset.market_index).copied().expect("asset oracle");
+            let market = state.spot_markets.get(&asset.market_index).expect("asset market");
             (oracle.price, 10_u128.pow(market.decimals))
         } else {
-            let oracle = state.spot_oracle(0).expect("USDC oracle");
+            let oracle = state.spot_oracle_prices.get(&0).copied().expect("USDC oracle");
             (oracle.price, QUOTE_PRECISION)
         };
 
@@ -2158,11 +2161,11 @@ impl PrimaryLiquidationStrategy {
             .iter()
             .filter(|p| p.base_asset_amount != 0 || p.quote_asset_amount != 0)
             .filter_map(|pos| {
-                let perp_market = state.perp_market(pos.market_index)?;
-                let oracle = state.perp_oracle(pos.market_index)?;
+                let perp_market = state.perp_markets.get(&pos.market_index)?;
+                let oracle = state.perp_oracle_prices.get(&pos.market_index).copied()?;
 
                 if pos.base_asset_amount == 0 && pos.quote_asset_amount != 0 {
-                    let _usdc = state.spot_market(0)?;
+                    let _usdc = state.spot_markets.get(&0)?;
 
                     let claimable_pnl_available: i128 = match pos.get_claimable_pnl(oracle.price, 0)
                     {
@@ -2218,8 +2221,8 @@ impl PrimaryLiquidationStrategy {
             .iter()
             .filter(|p| !p.is_available())
             .filter_map(|pos| {
-                let spot_market = state.spot_market(pos.market_index)?;
-                let oracle = state.spot_oracle(pos.market_index)?;
+                let spot_market = state.spot_markets.get(&pos.market_index)?;
+                let oracle = state.spot_oracle_prices.get(&pos.market_index).copied()?;
 
                 let token_amount = pos.get_signed_token_amount(&spot_market).ok()?;
 
