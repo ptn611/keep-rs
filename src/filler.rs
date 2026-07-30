@@ -7,7 +7,6 @@ use std::{
 
 use anchor_lang::Discriminator;
 use dashmap::DashMap;
-use drift::math::auction::calculate_auction_price;
 use drift_rs::{
     constants::PROGRAM_ID,
     dlob::{
@@ -15,6 +14,7 @@ use drift_rs::{
         DLOB,
     },
     event_subscriber::DriftEvent,
+    ffi::calculate_auction_price,
     grpc::{
         grpc_subscriber::{AccountFilter, GrpcConnectionOpts},
         AccountUpdate, TransactionUpdate,
@@ -228,20 +228,18 @@ impl FillerBot {
                                 ..Default::default()
                             };
 
-                            let reserve_price = perp_market.reserve_price().unwrap_or(0);
+                            let reserve_price = perp_market.reserve_price();
                             let vamm_price = if order_params.direction == PositionDirection::Long {
                                 perp_market
-                                    .ask_price(reserve_price, perp_market.amm.long_spread, perp_market.amm.reference_price_offset)
-                                    .unwrap_or(0)
+                                    .ask_price(Some(reserve_price))
                             } else {
                                 perp_market
-                                    .bid_price(reserve_price, perp_market.amm.short_spread, perp_market.amm.reference_price_offset)
-                                    .unwrap_or(0)
+                                    .bid_price(Some(reserve_price))
                             };
 
                             let price = match order_params.order_type {
                                 OrderType::Market | OrderType::Oracle => {
-                                    match calculate_auction_price(&order, slot + 1, perp_market.price_tick(), Some(oracle_price)) {
+                                    match calculate_auction_price(&order, slot + 1, perp_market.price_tick(), Some(oracle_price), false) {
                                         Ok(p) => p,
                                         Err(err) => {
                                             log::warn!(target: TARGET, "could not get auction price {err:?}, params: {order_params:?}, skipping...");
@@ -250,7 +248,7 @@ impl FillerBot {
                                     }
                                 }
                                 OrderType::Limit => {
-                                    match order.get_limit_price(Some(oracle_price), Some(vamm_price), slot + 1, perp_market.price_tick()) {
+                                    match order.get_limit_price(Some(oracle_price), Some(vamm_price), slot + 1, perp_market.price_tick(), false, None) {
                                         Ok(Some(p)) => p,
                                         _ => {
                                             log::warn!(target: TARGET, "could not get limit price: {order_params:?}, skipping...");
@@ -328,7 +326,7 @@ impl FillerBot {
 
                         let perp_market = drift.try_get_perp_market_account(market_index).expect("got perp market");
                         let chain_oracle_data = drift.try_get_mmoracle_for_perp_market(market_index, slot).expect("got oracle price");
-                        log::debug!(target: "oracle", "oracle price: delay:{:?},market:{:?},oracle:{:?},amm:{:?}", chain_oracle_data.delay, market, chain_oracle_data.price, perp_market.market_stats.mm_oracle_price);
+                        log::debug!(target: "oracle", "oracle price: delay:{:?},market:{:?},oracle:{:?},amm:{:?}", chain_oracle_data.delay, market, chain_oracle_data.price, perp_market.amm.mm_oracle_price);
                         let oracle_stale_for_amm = chain_oracle_data.delay > slots_before_stale_for_amm;
                         log::debug!(target: TARGET, "oracle_stale_for_amm={} (delay={}, market={})", oracle_stale_for_amm, chain_oracle_data.delay, market_index);
                         let mut oracle_price = chain_oracle_data.price as u64;
@@ -357,7 +355,7 @@ impl FillerBot {
                                 pyth_update,
                                 trigger_price,
                                 move |maker_cross| {
-                                    perp_market.has_too_much_drawdown().unwrap_or(false) && amm_wants_to_jit_make(&perp_market.amm, perp_market.order_step_size, maker_cross.taker_direction)
+                                    perp_market.has_too_much_drawdown() && amm_wants_to_jit_make(&perp_market.amm, perp_market.amm.order_step_size, maker_cross.taker_direction)
                                 },
                                 perp_market,
                                 oracle_stale_for_amm,
@@ -686,7 +684,7 @@ async fn try_auction_fill(
 
             if let Ok(pos) = taker_account_data.get_perp_position(market_index) {
                 if let Ok((base_asset_amount, _limit_price)) =
-                    drift::math::orders::calculate_base_asset_amount_for_amm_to_fulfill(
+                    perp_market.calculate_base_asset_amount_for_amm_to_fulfill(
                         taker_account_data
                             .orders
                             .iter()
@@ -702,11 +700,11 @@ async fn try_auction_fill(
                     // if user position is less than min order size, step size is the threshold
                     let amm_size_threshold = if !taker_order.is_reduce_only()
                         && pos.base_asset_amount.unsigned_abs()
-                            > perp_market.market_stats.min_order_size
+                            > perp_market.amm.min_order_size
                     {
-                        perp_market.market_stats.min_order_size
+                        perp_market.amm.min_order_size
                     } else {
-                        perp_market.order_step_size
+                        perp_market.amm.order_step_size
                     };
                     if base_asset_amount < amm_size_threshold {
                         log::info!(target: TARGET, "skip vamm cross too small: {crosses:?}");
@@ -758,7 +756,7 @@ async fn try_auction_fill(
             .send_tx(
                 tx,
                 TxIntent::AuctionFill {
-                    taker_order_id: taker_order.order_id,
+                    _taker_order_id: taker_order.order_id,
                     maker_crosses: crosses,
                     has_trigger: taker_is_trigger,
                 },
@@ -890,9 +888,9 @@ async fn try_uncross(
                 tx,
                 TxIntent::LimitUncross {
                     slot,
-                    market_index,
-                    taker_order_id,
-                    maker_order_id: 0,
+                    _market_index: market_index,
+                    _taker_order_id: taker_order_id,
+                    _maker_order_id: 0,
                 },
                 cu_limit as u64,
             )
@@ -906,8 +904,8 @@ fn amm_wants_to_jit_make(
     taker_direction: PositionDirection,
 ) -> bool {
     let amm_wants_to_jit_make = match taker_direction {
-        PositionDirection::Long => amm.base_asset_amount_with_amm < -(order_step_size as i128),
-        PositionDirection::Short => amm.base_asset_amount_with_amm > order_step_size as i128,
+        PositionDirection::Long => amm.base_asset_amount_with_amm.as_i128() < -(order_step_size as i128),
+        PositionDirection::Short => amm.base_asset_amount_with_amm.as_i128() > order_step_size as i128,
     };
     amm_wants_to_jit_make && amm.amm_jit_intensity > 0
 }
@@ -940,7 +938,7 @@ pub async fn sync_stats_accounts(
 ) -> Result<(), solana_rpc_client_api::client_error::Error> {
     let stats_sync_result = drift
         .rpc()
-        .get_program_accounts_with_config(
+        .get_program_ui_accounts_with_config(
             &PROGRAM_ID,
             RpcProgramAccountsConfig {
                 filters: Some(vec![drift_rs::memcmp::get_user_stats_filter()]),
@@ -956,9 +954,16 @@ pub async fn sync_stats_accounts(
     match stats_sync_result {
         Ok(accounts) => {
             for (pubkey, account) in accounts {
+                let raw_data = match account.data.decode() {
+                    Some(data) => data,
+                    None => {
+                        log::error!(target: "dlob", "failed to decode account data for {pubkey}");
+                        continue;
+                    }
+                };
                 drift.backend().account_map().on_account_fn()(&AccountUpdate {
                     pubkey,
-                    data: &account.data,
+                    data: &raw_data,
                     lamports: account.lamports,
                     owner: PROGRAM_ID,
                     rent_epoch: u64::MAX,
@@ -983,7 +988,7 @@ pub async fn sync_user_accounts(
 ) -> Result<(), solana_rpc_client_api::client_error::Error> {
     let sync_result = drift
         .rpc()
-        .get_program_accounts_with_config(
+        .get_program_ui_accounts_with_config(
             &PROGRAM_ID,
             RpcProgramAccountsConfig {
                 filters: Some(vec![
@@ -1002,11 +1007,18 @@ pub async fn sync_user_accounts(
     match sync_result {
         Ok(accounts) => {
             for (pubkey, account) in accounts {
-                let user = drift_rs::utils::deser_zero_copy::<User>(&account.data);
+                let raw_data = match account.data.decode() {
+                    Some(data) => data,
+                    None => {
+                        log::error!(target: "dlob", "failed to decode account data for {pubkey}");
+                        continue;
+                    }
+                };
+                let user = drift_rs::utils::deser_zero_copy::<User>(&raw_data);
                 dlob_notifier.user_update(pubkey, None, &user, 0);
                 drift.backend().account_map().on_account_fn()(&AccountUpdate {
                     pubkey,
-                    data: &account.data,
+                    data: &raw_data,
                     lamports: account.lamports,
                     owner: PROGRAM_ID,
                     rent_epoch: u64::MAX,
@@ -1063,13 +1075,13 @@ async fn subscribe_grpc(
 pub enum TxWork {
     Send {
         tx: VersionedTransaction,
-        ts: u64,
+        _ts: u64,
         intent: TxIntent,
         cu_limit: u64,
     },
     Confirm {
         tx: Signature,
-        ts: u64,
+        _ts: u64,
     },
 }
 
@@ -1112,7 +1124,7 @@ impl TxWorker {
                 match work {
                     TxWork::Send {
                         tx,
-                        ts: _,
+                        _ts: _,
                         intent,
                         cu_limit,
                     } => {
@@ -1122,7 +1134,7 @@ impl TxWorker {
                         }
                         self.send_tx(&rt, tx, intent, cu_limit);
                     }
-                    TxWork::Confirm { tx, ts: _ } => {
+                    TxWork::Confirm { tx, _ts: _ } => {
                         self.confirm_tx(&rt, tx);
                     }
                 }
@@ -1251,7 +1263,7 @@ impl TxWorker {
                 signature,
                 intent,
                 cu_limit: sent_cu_limit,
-                ts: _,
+                _ts: _,
             } = pending_tx_meta.unwrap();
 
             let intent_label = intent.label();
@@ -1440,7 +1452,7 @@ impl TxSender {
         self.tx
             .send(TxWork::Confirm {
                 tx,
-                ts: SystemTime::now()
+                _ts: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64,
@@ -1461,7 +1473,7 @@ impl TxSender {
         self.tx
             .send(TxWork::Send {
                 tx: signed_tx,
-                ts: SystemTime::now()
+                _ts: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64,

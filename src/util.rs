@@ -74,7 +74,7 @@ impl<const N: usize> OrderSlotLimiter<N> {
         }
     }
 
-    pub fn check_event(&self, g: u64, id: u32) -> bool {
+    pub fn _check_event(&self, g: u64, id: u32) -> bool {
         // Check generations g - 1 and g - 4
         for i in 1..=4 {
             let past_g = g.saturating_sub(i);
@@ -96,60 +96,60 @@ pub enum TxIntent {
     #[default]
     None,
     AuctionFill {
-        taker_order_id: u32,
+        _taker_order_id: u32,
         has_trigger: bool,
         maker_crosses: MakerCrosses,
     },
     SwiftFill {
         maker_crosses: MakerCrosses,
     },
-    VAMMTakerFill {
+    _VAMMTakerFill {
         slot: u64,
-        market_index: u16,
-        maker_order_id: u32,
+        _market_index: u16,
+        _maker_order_id: u32,
     },
     /// limit orders crossed
     LimitUncross {
         slot: u64,
-        market_index: u16,
-        taker_order_id: u32,
-        maker_order_id: u32,
+        _market_index: u16,
+        _taker_order_id: u32,
+        _maker_order_id: u32,
     },
     LiquidateWithFill {
-        market_index: u16,
+        _market_index: u16,
         liquidatee: Pubkey,
         slot: u64,
     },
     LiquidatePerp {
-        market_index: u16,
+        _market_index: u16,
         liquidatee: Pubkey,
         slot: u64,
     },
-    LiquidatePerpPnlForDeposit {
+    _LiquidatePerpPnlForDeposit {
         perp_market_index: u16,
         spot_market_index: u16,
         liquidatee: Pubkey,
         slot: u64,
     },
-    LiquidateBorrowForPerpPnl {
+    _LiquidateBorrowForPerpPnl {
         perp_market_index: u16,
         spot_market_index: u16,
         liquidatee: Pubkey,
         slot: u64,
     },
     LiquidateSpot {
-        asset_market_index: u16,
-        liability_market_index: u16,
+        _asset_market_index: u16,
+        _liability_market_index: u16,
         liquidatee: Pubkey,
         slot: u64,
     },
     Derisk {
-        market_index: u16,
-        subaccount: Pubkey,
+        _market_index: u16,
+        _subaccount: Pubkey,
     },
     SettlePnl {
-        market_index: u16,
-        subaccount: Pubkey,
+        _market_index: u16,
+        _subaccount: Pubkey,
     },
 }
 
@@ -172,11 +172,11 @@ impl TxIntent {
                 }
             }
             TxIntent::LimitUncross { .. } => "limit_uncross",
-            TxIntent::VAMMTakerFill { .. } => "vamm_taker",
+            TxIntent::_VAMMTakerFill { .. } => "vamm_taker",
             TxIntent::LiquidateWithFill { .. } => "liq_with_fill",
             TxIntent::LiquidatePerp { .. } => "liq_perp",
-            TxIntent::LiquidatePerpPnlForDeposit { .. } => "liq_perp_pnl_for_deposit",
-            TxIntent::LiquidateBorrowForPerpPnl { .. } => "liq_borrow_for_perp_pnl",
+            TxIntent::_LiquidatePerpPnlForDeposit { .. } => "liq_perp_pnl_for_deposit",
+            TxIntent::_LiquidateBorrowForPerpPnl { .. } => "liq_borrow_for_perp_pnl",
             TxIntent::LiquidateSpot { .. } => "liq_spot",
             TxIntent::Derisk { .. } => "derisk",
             TxIntent::SettlePnl { .. } => "settle_pnl",
@@ -192,12 +192,12 @@ impl TxIntent {
             TxIntent::SwiftFill { maker_crosses, .. } => {
                 maker_crosses.orders.len() + if maker_crosses.has_vamm_cross { 1 } else { 0 }
             }
-            TxIntent::VAMMTakerFill { .. } => 1,
+            TxIntent::_VAMMTakerFill { .. } => 1,
             TxIntent::LimitUncross { .. } => 1,
             TxIntent::LiquidateWithFill { .. } => 1,
             TxIntent::LiquidatePerp { .. } => 0,
-            TxIntent::LiquidatePerpPnlForDeposit { .. } => 0,
-            TxIntent::LiquidateBorrowForPerpPnl { .. } => 0,
+            TxIntent::_LiquidatePerpPnlForDeposit { .. } => 0,
+            TxIntent::_LiquidateBorrowForPerpPnl { .. } => 0,
             TxIntent::LiquidateSpot { .. } => 0,
             TxIntent::Derisk { .. } => 0,
             TxIntent::SettlePnl { .. } => 0,
@@ -221,12 +221,12 @@ impl TxIntent {
             TxIntent::SwiftFill { maker_crosses, .. } => {
                 (maker_crosses.orders.to_vec(), maker_crosses.slot)
             }
-            Self::VAMMTakerFill { slot, .. } => (vec![], *slot),
+            Self::_VAMMTakerFill { slot, .. } => (vec![], *slot),
             Self::LimitUncross { slot, .. } => (vec![], *slot),
             Self::LiquidateWithFill { slot, .. } => (vec![], *slot),
             Self::LiquidatePerp { slot, .. } => (vec![], *slot),
-            Self::LiquidatePerpPnlForDeposit { slot, .. } => (vec![], *slot),
-            Self::LiquidateBorrowForPerpPnl { slot, .. } => (vec![], *slot),
+            Self::_LiquidatePerpPnlForDeposit { slot, .. } => (vec![], *slot),
+            Self::_LiquidateBorrowForPerpPnl { slot, .. } => (vec![], *slot),
             Self::LiquidateSpot { slot, .. } => (vec![], *slot),
             TxIntent::Derisk { .. } => (vec![], 0),
             TxIntent::SettlePnl { .. } => (vec![], 0),
@@ -235,12 +235,12 @@ impl TxIntent {
 
     pub fn slot(&self) -> Option<u64> {
         match self {
-            Self::VAMMTakerFill { slot, .. }
+            Self::_VAMMTakerFill { slot, .. }
             | Self::LimitUncross { slot, .. }
             | Self::LiquidateWithFill { slot, .. }
             | Self::LiquidatePerp { slot, .. }
-            | Self::LiquidatePerpPnlForDeposit { slot, .. }
-            | Self::LiquidateBorrowForPerpPnl { slot, .. }
+            | Self::_LiquidatePerpPnlForDeposit { slot, .. }
+            | Self::_LiquidateBorrowForPerpPnl { slot, .. }
             | Self::LiquidateSpot { slot, .. } => Some(*slot),
             _ => None,
         }
@@ -251,8 +251,8 @@ impl TxIntent {
         match self {
             Self::LiquidateWithFill { liquidatee, .. }
             | Self::LiquidatePerp { liquidatee, .. }
-            | Self::LiquidatePerpPnlForDeposit { liquidatee, .. }
-            | Self::LiquidateBorrowForPerpPnl { liquidatee, .. }
+            | Self::_LiquidatePerpPnlForDeposit { liquidatee, .. }
+            | Self::_LiquidateBorrowForPerpPnl { liquidatee, .. }
             | Self::LiquidateSpot { liquidatee, .. } => Some(*liquidatee),
             _ => None,
         }
@@ -264,8 +264,8 @@ impl TxIntent {
             self,
             Self::LiquidateWithFill { .. }
                 | Self::LiquidatePerp { .. }
-                | Self::LiquidatePerpPnlForDeposit { .. }
-                | Self::LiquidateBorrowForPerpPnl { .. }
+                | Self::_LiquidatePerpPnlForDeposit { .. }
+                | Self::_LiquidateBorrowForPerpPnl { .. }
                 | Self::LiquidateSpot { .. }
         )
     }
@@ -276,14 +276,14 @@ pub struct PendingTxMeta {
     pub signature: Signature,
     pub intent: TxIntent,
     pub cu_limit: u64,
-    pub ts: u64,
+    pub _ts: u64,
 }
 
 impl PendingTxMeta {
     pub fn new(sig: Signature, intent: TxIntent, cu_limit: u64) -> Self {
         Self {
             signature: sig,
-            ts: SystemTime::now()
+            _ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,

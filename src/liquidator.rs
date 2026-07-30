@@ -37,16 +37,14 @@ use drift_rs::{
     titan,
     types::{
         accounts::{PerpMarket, SpotMarket, User},
-        MarginRequirementType, MarketId, MarketStatus, MarketType, OrderParams, OrderType,
+        MarginRequirementType, MarketId, MarketStatus, MarketType, OracleSource, OrderParams, OrderType,
         PerpPosition, PositionDirection, SpotBalanceType, SpotPosition,
     },
-    DriftClient, GrpcSubscribeOpts, Pubkey, TransactionBuilder,
+    DriftClient, GrpcSubscribeOpts, MarketState, Pubkey, TransactionBuilder,
 };
 use drift_rs::{jupiter::JupiterSwapApi, titan::TitanSwapApi};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_program::sysvar
-use solana_slot_history::Slot;
-use solana_sdk::signature::Signature;
+use solana_sdk::{clock::Slot, signature::Signature};
 
 use crate::{
     filler::{TxSender, TxWorker},
@@ -68,7 +66,7 @@ const LIQUIDATION_DEADLINE_MS: u64 = 1_000;
 const MAX_LIQUIDATION_AGE_MS: u64 = 1_000;
 
 /// Maximum number of consecutive failed liquidation attempts before applying extended cooldown
-const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+const _MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
 /// Base cooldown in milliseconds after a failed liquidation (doubles each failure)
 const FAILURE_COOLDOWN_BASE_MS: u64 = 5_000;
@@ -141,23 +139,23 @@ const BLOCKED_SPOT_MARKETS: &[u16] = &[40];
 struct UserAccountMetadata {
     user: User,
     last_updated_slot: u64,
-    last_updated_timestamp_ms: u64,
+    _last_updated_timestamp_ms: u64,
 }
 
 /// Metadata tracking for oracle prices to detect staleness
 #[derive(Clone, Debug)]
 struct OraclePriceMetadata {
-    price_data: OraclePriceData,
+    _price_data: OraclePriceData,
     last_updated_slot: u64,
-    last_updated_timestamp_ms: u64,
+    _last_updated_timestamp_ms: u64,
 }
 
 /// Errors indicating data staleness
 #[derive(Debug, Clone)]
 enum StalenessError {
-    UserAccountStale { age_slots: u64 },
-    OraclePriceStale { market: MarketId, age_slots: u64 },
-    PythPriceStale { market_id: u16, age_ms: u64 },
+    UserAccountStale { _age_slots: u64 },
+    OraclePriceStale { _market: MarketId, _age_slots: u64 },
+    PythPriceStale { _market_id: u16, _age_ms: u64 },
 }
 
 /// Helper to get current time in milliseconds since epoch
@@ -178,7 +176,7 @@ fn validate_data_freshness(
     let user_age_slots = current_slot.saturating_sub(user_meta.last_updated_slot);
     if user_age_slots > MAX_USER_AGE_SLOTS {
         return Err(StalenessError::UserAccountStale {
-            age_slots: user_age_slots,
+            _age_slots: user_age_slots,
         });
     }
 
@@ -190,8 +188,8 @@ fn validate_data_freshness(
                 let oracle_age_slots = current_slot.saturating_sub(oracle_meta.last_updated_slot);
                 if oracle_age_slots > MAX_ORACLE_AGE_SLOTS {
                     return Err(StalenessError::OraclePriceStale {
-                        market: market_id,
-                        age_slots: oracle_age_slots,
+                        _market: market_id,
+                        _age_slots: oracle_age_slots,
                     });
                 }
             }
@@ -205,8 +203,8 @@ fn validate_data_freshness(
                 let oracle_age_slots = current_slot.saturating_sub(oracle_meta.last_updated_slot);
                 if oracle_age_slots > MAX_ORACLE_AGE_SLOTS {
                     return Err(StalenessError::OraclePriceStale {
-                        market: market_id,
-                        age_slots: oracle_age_slots,
+                        _market: market_id,
+                        _age_slots: oracle_age_slots,
                     });
                 }
             }
@@ -225,8 +223,8 @@ fn validate_pyth_price_freshness(pyth_update: &PythPriceUpdate) -> Result<(), St
 
     if age_ms > MAX_PYTH_AGE_MS {
         return Err(StalenessError::PythPriceStale {
-            market_id: pyth_update.market_id,
-            age_ms,
+            _market_id: pyth_update.market_id,
+            _age_ms: age_ms,
         });
     }
 
@@ -234,7 +232,7 @@ fn validate_pyth_price_freshness(pyth_update: &PythPriceUpdate) -> Result<(), St
 }
 
 /// Update dashboard state with current high-risk users and oracle prices
-async fn update_dashboard_state(
+async fn _update_dashboard_state(
     drift: &DriftClient,
     dashboard_state: &DashboardStateRef,
     users: &BTreeMap<Pubkey, UserAccountMetadata>,
@@ -305,7 +303,7 @@ async fn update_dashboard_state(
                             Ok(amount) => amount,
                             Err(_) => continue,
                         };
-                        (base, base * oracle_meta.price_data.price as i128)
+                        (base, base * oracle_meta._price_data.price as i128)
                     } else {
                         (0, 0) // No oracle price available
                     };
@@ -328,7 +326,7 @@ async fn update_dashboard_state(
                 free_margin_ratio,
                 status: display_status,
                 last_updated_slot: user_meta.last_updated_slot,
-                last_updated_ms: user_meta.last_updated_timestamp_ms,
+                last_updated_ms: user_meta._last_updated_timestamp_ms,
                 positions,
             });
         }
@@ -337,7 +335,7 @@ async fn update_dashboard_state(
     let mut oracle_price_infos = Vec::new();
     for (market_id, oracle_meta) in oracle_prices {
         let age_slots = current_slot.saturating_sub(oracle_meta.last_updated_slot);
-        let age_ms = now_ms.saturating_sub(oracle_meta.last_updated_timestamp_ms);
+        let age_ms = now_ms.saturating_sub(oracle_meta._last_updated_timestamp_ms);
         let is_stale = age_slots > MAX_ORACLE_AGE_SLOTS;
 
         oracle_price_infos.push(OraclePriceInfo {
@@ -347,9 +345,9 @@ async fn update_dashboard_state(
                 crate::http::MarketType::Spot
             },
             market_index: market_id.index(),
-            price: oracle_meta.price_data.price,
+            price: oracle_meta._price_data.price,
             last_updated_slot: oracle_meta.last_updated_slot,
-            last_updated_ms: oracle_meta.last_updated_timestamp_ms,
+            last_updated_ms: oracle_meta._last_updated_timestamp_ms,
             age_slots,
             age_ms,
             is_stale,
@@ -426,10 +424,12 @@ pub enum LiquidationOutcome {
 }
 
 impl LiquidationOutcome {
+    #[allow(dead_code)]
     pub fn is_sent(&self) -> bool {
         matches!(self, Self::TxSent)
     }
 
+    #[allow(dead_code)]
     pub fn reason(&self) -> &'static str {
         match self {
             Self::TxSent => "sent",
@@ -494,7 +494,7 @@ pub struct LiquidatorBot {
     )>,
     pyth_price_feed: Option<tokio::sync::mpsc::Receiver<PythPriceUpdate>>,
     /// Dashboard state for HTTP API
-    dashboard_state: DashboardStateRef,
+    _dashboard_state: DashboardStateRef,
     subaccount_pubkeys: Vec<Pubkey>,
     /// Track collateral info per subaccount
     collateral_info_per_subaccount: Arc<DashMap<Pubkey, CollateralInfo>>,
@@ -729,7 +729,7 @@ impl LiquidatorBot {
             market_state,
             liq_tx,
             pyth_price_feed: Some(pyth_price_feed),
-            dashboard_state,
+            _dashboard_state: dashboard_state,
             subaccount_pubkeys,
             collateral_info_per_subaccount,
             txs_in_flight,
@@ -798,7 +798,7 @@ impl LiquidatorBot {
                         UserAccountMetadata {
                             user: *user,
                             last_updated_slot: 0, // Will be updated when we get first update
-                            last_updated_timestamp_ms: now_ms,
+                            _last_updated_timestamp_ms: now_ms,
                         },
                     );
                     // Check margin status and add to high-risk set if needed
@@ -924,7 +924,7 @@ impl LiquidatorBot {
                             UserAccountMetadata {
                                 user: user.clone(),
                                 last_updated_slot: update_slot,
-                                last_updated_timestamp_ms: now_ms,
+                                _last_updated_timestamp_ms: now_ms,
                             },
                         );
 
@@ -934,7 +934,7 @@ impl LiquidatorBot {
                                 validate_data_freshness(user_meta, &oracle_prices, current_slot)
                             {
                                 match staleness_err {
-                                    StalenessError::UserAccountStale { age_slots: _ } => {
+                                    StalenessError::UserAccountStale { _age_slots: _ } => {
                                         // log::debug!(
                                         //     target: TARGET,
                                         //     "Recalculating margin for stale user {:?}: user account {} slots old",
@@ -942,8 +942,8 @@ impl LiquidatorBot {
                                         // );
                                     }
                                     StalenessError::OraclePriceStale {
-                                        market: _,
-                                        age_slots: _,
+                                        _market: _,
+                                        _age_slots: _,
                                     } => {
                                         // log::debug!(
                                         //     target: TARGET,
@@ -1020,9 +1020,9 @@ impl LiquidatorBot {
                             oracle_prices.insert(
                                 market,
                                 OraclePriceMetadata {
-                                    price_data: oracle_price_data,
+                                    _price_data: oracle_price_data,
                                     last_updated_slot: slot,
-                                    last_updated_timestamp_ms: now_ms,
+                                    _last_updated_timestamp_ms: now_ms,
                                 },
                             );
                             current_slot = slot;
@@ -1055,7 +1055,7 @@ impl LiquidatorBot {
                 // Update dashboard state
                 // update_dashboard_state(
                 //     drift,
-                //     &self.dashboard_state,
+                //     &self._dashboard_state,
                 //     &users,
                 //     &oracle_prices,
                 //     &high_risk,
@@ -1072,7 +1072,7 @@ impl LiquidatorBot {
                             validate_data_freshness(user_meta, &oracle_prices, current_slot)
                         {
                             match staleness_err {
-                                StalenessError::UserAccountStale { age_slots: _ } => {
+                                StalenessError::UserAccountStale { _age_slots: _ } => {
                                     // log::debug!(
                                     //     target: TARGET,
                                     //     "Recalculating margin for stale user {:?}: user account {} slots old",
@@ -1080,8 +1080,8 @@ impl LiquidatorBot {
                                     // );
                                 }
                                 StalenessError::OraclePriceStale {
-                                    market: _,
-                                    age_slots: _,
+                                    _market: _,
+                                    _age_slots: _,
                                 } => {
                                     // log::debug!(
                                     //     target: TARGET,
@@ -1181,7 +1181,7 @@ impl LiquidatorBot {
                             validate_data_freshness(user_meta, &oracle_prices, current_slot)
                         {
                             match staleness_err {
-                                StalenessError::UserAccountStale { age_slots: _ } => {
+                                StalenessError::UserAccountStale { _age_slots: _ } => {
                                     // log::debug!(
                                     //     target: TARGET,
                                     //     "Checking stale user {:?} for high-risk status: {} slots old",
@@ -1189,8 +1189,8 @@ impl LiquidatorBot {
                                     // );
                                 }
                                 StalenessError::OraclePriceStale {
-                                    market: _,
-                                    age_slots: _,
+                                    _market: _,
+                                    _age_slots: _,
                                 } => {
                                     // log::debug!(
                                     //     target: TARGET,
@@ -1235,13 +1235,14 @@ impl LiquidatorBot {
             // Every RECHECK_CYCLE_INTERVAL cycles, recheck all users to find new high-risk users
             cycle_count += 1;
             if cycle_count % RECHECK_CYCLE_INTERVAL == 0 {
-                let t0 = current_time_millis();
-                let mut newly_high_risk = 0;
+                let _t0 = current_time_millis();
+                #[allow(unused_assignments)]
+                let mut _newly_high_risk = 0;
 
                 // Update dashboard state periodically
                 // update_dashboard_state(
                 //     drift,
-                //     &self.dashboard_state,
+                //     &self._dashboard_state,
                 //     &users,
                 //     &oracle_prices,
                 //     &high_risk,
@@ -1261,7 +1262,7 @@ impl LiquidatorBot {
                         validate_data_freshness(user_meta, &oracle_prices, current_slot)
                     {
                         match staleness_err {
-                            StalenessError::UserAccountStale { age_slots: _ } => {
+                            StalenessError::UserAccountStale { _age_slots: _ } => {
                                 // log::debug!(
                                 //     target: TARGET,
                                 //     "Recalculating margin for stale user {:?}: user account {} slots old",
@@ -1269,8 +1270,8 @@ impl LiquidatorBot {
                                 // );
                             }
                             StalenessError::OraclePriceStale {
-                                market: _,
-                                age_slots: _,
+                                _market: _,
+                                _age_slots: _,
                             } => {
                                 // log::debug!(
                                 //     target: TARGET,
@@ -1305,7 +1306,7 @@ impl LiquidatorBot {
 
                     if status.is_liquidatable() {
                         high_risk.insert(*pubkey);
-                        newly_high_risk += 1;
+                        _newly_high_risk += 1;
                         log::info!(target: TARGET, "found liquidatable user: {pubkey:?}, margin:{margin_info:?}");
 
                         let pyth_price_update = user_meta
@@ -1352,7 +1353,7 @@ impl LiquidatorBot {
                         }
                     } else if status.is_at_risk() {
                         high_risk.insert(*pubkey);
-                        newly_high_risk += 1;
+                        _newly_high_risk += 1;
                     }
                 }
 
@@ -1446,8 +1447,8 @@ async fn derisk_subaccount(
                 .send_tx(
                     tx_builder.build(),
                     TxIntent::Derisk {
-                        market_index: position.market_index,
-                        subaccount,
+                        _market_index: position.market_index,
+                        _subaccount: subaccount,
                     },
                     cu_limit as u64,
                 )
@@ -1459,8 +1460,8 @@ async fn derisk_subaccount(
                 .send_tx(
                     tx_builder.build(),
                     TxIntent::SettlePnl {
-                        market_index: position.market_index,
-                        subaccount,
+                            _market_index: position.market_index,
+                            _subaccount: subaccount,
                     },
                     cu_limit as u64,
                 )
@@ -1614,7 +1615,7 @@ async fn setup_grpc(
                             let user = drift_rs::utils::deser_zero_copy::<User>(acc.data);
                             if let Err(err) = tx.try_send(GrpcEvent::UserUpdate {
                                 pubkey: acc.pubkey,
-                                user,
+                                user: *user,
                                 slot: acc.slot,
                             }) {
                                 log::error!(target: TARGET, "failed to forward user update event: {err:?}");
@@ -1629,7 +1630,7 @@ async fn setup_grpc(
                         move |acc| {
                             let market = drift_rs::utils::deser_zero_copy::<PerpMarket>(&acc.data);
                             if let Err(err) = tx.try_send(GrpcEvent::PerpMarketUpdate {
-                                market,
+                                market: *market,
                                 slot: acc.slot,
                             }) {
                                 log::error!(target: TARGET, "failed to forward perp market update event: {err:?}");
@@ -1644,7 +1645,7 @@ async fn setup_grpc(
                         move |acc| {
                             let market = drift_rs::utils::deser_zero_copy::<SpotMarket>(acc.data);
                             if let Err(err) = tx.try_send(GrpcEvent::SpotMarketUpdate {
-                                market,
+                                market: *market,
                                 slot: acc.slot,
                             }) {
                                 log::error!(target: TARGET, "failed to forward spot market update event: {err:?}");
@@ -1661,22 +1662,16 @@ async fn setup_grpc(
                         let lamports = acc.lamports;
                         let slot = acc.slot;
                         for (market, oracle_source) in oracle_markets {
-                            let mut data = acc.data.to_vec();
-                            let mut lamports = lamports;
-                            let owner = acc.owner;
-                            let pubkey = acc.pubkey;
-                            let account_info = anchor_lang::prelude::AccountInfo::new(
-                                &pubkey,
-                                false,
-                                false,
-                                &mut lamports,
-                                &mut data,
-                                &owner,
-                                false,
-                            );
-                            let oracle_price_data = drift::state::oracle::get_oracle_price(
-                                oracle_source,
-                                &account_info,
+                            let mut account_data = (acc.pubkey, drift_rs::ffi::Account {
+                                lamports,
+                                data: acc.data.to_vec(),
+                                owner: acc.owner,
+                                executable: false,
+                                rent_epoch: 0,
+                            });
+                            let oracle_price_data = drift_rs::ffi::get_oracle_price(
+                                *oracle_source,
+                                &mut account_data,
                                 slot,
                             )
                             .unwrap();
@@ -1962,6 +1957,7 @@ impl PrimaryLiquidationStrategy {
             .get_margin_ratio(
                 base_asset_amount.unsigned_abs() as u128,
                 MarginRequirementType::Initial,
+                false,
             )
             .ok()?;
 
@@ -1976,7 +1972,7 @@ impl PrimaryLiquidationStrategy {
         Some(collateral)
     }
 
-    fn extract_collateral_params(
+    fn _extract_collateral_params(
         market_state: Arc<RwLock<MarketState>>,
         liability: &PositionInfo,
         asset: &PositionInfo,
@@ -1985,10 +1981,14 @@ impl PrimaryLiquidationStrategy {
 
         let (liability_oracle, liability_precision) = if liability.market_type == MarketType::Spot {
             let oracle = state
-                .spot_oracle(liability.market_index)
+                .spot_oracle_prices
+                .get(&liability.market_index)
+                .copied()
                 .expect("liability oracle");
             let market = state
-                .spot_market(liability.market_index)
+                .spot_markets
+                .get(&liability.market_index)
+                .copied()
                 .expect("liability market");
             (oracle.price, 10_u128.pow(market.decimals))
         } else {
@@ -1998,7 +1998,7 @@ impl PrimaryLiquidationStrategy {
 
         let liability_weight = if liability.market_type == MarketType::Spot {
             let market = state
-                .spot_market(liability.market_index)
+                .spot_markets.get(&liability.market_index)
                 .expect("liability spot market");
             market.initial_liability_weight as u128
         } else {
@@ -2016,7 +2016,7 @@ impl PrimaryLiquidationStrategy {
 
         let (asset_weight, asset_weight_precision) = if asset.market_type == MarketType::Spot {
             let market = state
-                .spot_market(asset.market_index)
+                .spot_markets.get(&asset.market_index)
                 .expect("asset spot market");
             (
                 market.initial_asset_weight as u128,
@@ -2038,7 +2038,7 @@ impl PrimaryLiquidationStrategy {
         )
     }
 
-    fn calculate_net_collateral_requirement_with_params(
+    fn _calculate_net_collateral_requirement_with_params(
         liability_size: u128,
         liability: &PositionInfo,
         asset: &PositionInfo,
@@ -2087,16 +2087,16 @@ impl PrimaryLiquidationStrategy {
         net_impact as i128
     }
 
-    fn calculate_net_collateral_requirement(
+    fn _calculate_net_collateral_requirement(
         liability_size: u128,
         liability: &PositionInfo,
         asset: &PositionInfo,
         market_state: Arc<RwLock<MarketState>>,
     ) -> i128 {
         let (l_oracle, l_prec, l_weight, l_weight_prec, a_oracle, a_prec, a_weight, a_weight_prec) =
-            Self::extract_collateral_params(market_state, liability, asset);
+            Self::_extract_collateral_params(market_state, liability, asset);
 
-        Self::calculate_net_collateral_requirement_with_params(
+        Self::_calculate_net_collateral_requirement_with_params(
             liability_size,
             liability,
             asset,
@@ -2113,7 +2113,7 @@ impl PrimaryLiquidationStrategy {
 
     /// finds the max liquidation amount whose collateral impact fits within available collateral,
     /// allowing unused collateral up to `tolerance`.
-    fn find_max_liq_amount<F>(
+    fn _find_max_liq_amount<F>(
         max_amount: u128,
         available_collateral: i128,
         tolerance: i128,
@@ -2186,6 +2186,7 @@ impl PrimaryLiquidationStrategy {
                         .get_margin_ratio(
                             pos.base_asset_amount.unsigned_abs() as u128,
                             MarginRequirementType::Initial,
+                            false,
                         )
                         .ok()?;
 
@@ -2319,7 +2320,7 @@ impl PrimaryLiquidationStrategy {
             if liability.market_type == MarketType::Spot {
                 true
             } else {
-                match state.perp_market(liability.market_index) {
+                match state.perp_markets.get(&liability.market_index) {
                     Some(perp_market) => perp_tier_is_as_safe_as(
                         perp_market.contract_tier.to_number(),
                         safest_perp_tier,
@@ -2513,7 +2514,7 @@ impl PrimaryLiquidationStrategy {
             .send_tx(
                 tx,
                 TxIntent::LiquidateWithFill {
-                    market_index,
+                        _market_index: market_index,
                     liquidatee: liquidatee_subaccount,
                     slot,
                 },
@@ -2584,7 +2585,7 @@ impl PrimaryLiquidationStrategy {
             .send_tx(
                 tx,
                 TxIntent::LiquidatePerp {
-                    market_index,
+                        _market_index: market_index,
                     liquidatee: liquidatee_subaccount,
                     slot,
                 },
@@ -2868,7 +2869,7 @@ impl PrimaryLiquidationStrategy {
             let spot_market = {
                 let state = market_state.read().unwrap();
                 let state_data = state.load();
-                match state_data.spot_market(pos.market_index) {
+                match state_data.spot_markets.get(&pos.market_index) {
                     Some(m) => *m,
                     None => continue,
                 }
@@ -3067,8 +3068,8 @@ impl PrimaryLiquidationStrategy {
                 .send_tx(
                     tx,
                     TxIntent::LiquidateSpot {
-                        asset_market_index,
-                        liability_market_index,
+                            _asset_market_index: asset_market_index,
+                            _liability_market_index: liability_market_index,
                         liquidatee,
                         slot,
                     },
@@ -3078,7 +3079,7 @@ impl PrimaryLiquidationStrategy {
         }
     }
 
-    async fn try_liquidate_perp_pnl_for_deposit(
+    async fn _try_liquidate_perp_pnl_for_deposit(
         &self,
         drift: &DriftClient,
         subaccount: Pubkey,
@@ -3125,7 +3126,7 @@ impl PrimaryLiquidationStrategy {
             &liquidatee_account,
             liability.market_index,
             asset.market_index,
-            u128::from(liq_amount),
+            u128::from(liq_amount).into(),
             None,
         );
 
@@ -3134,7 +3135,7 @@ impl PrimaryLiquidationStrategy {
         match tx_sender
             .send_tx(
                 tx,
-                TxIntent::LiquidatePerpPnlForDeposit {
+                TxIntent::_LiquidatePerpPnlForDeposit {
                     perp_market_index: liability.market_index,
                     spot_market_index: asset.market_index,
                     liquidatee,
@@ -3162,7 +3163,7 @@ impl PrimaryLiquidationStrategy {
     }
 
     /// Attempt perp pnl for deposit liquidation
-    async fn liquidate_perp_pnl_for_deposit(
+    async fn _liquidate_perp_pnl_for_deposit(
         &self,
         drift: &DriftClient,
         market_state: Arc<RwLock<MarketState>>,
@@ -3176,7 +3177,7 @@ impl PrimaryLiquidationStrategy {
         slot: u64,
         pyth_price_update: Option<PythPriceUpdate>,
     ) {
-        let net_collateral_req = Self::calculate_net_collateral_requirement(
+        let net_collateral_req = Self::_calculate_net_collateral_requirement(
             liability.collateral_required.unsigned_abs(),
             &liability,
             &asset,
@@ -3201,17 +3202,17 @@ impl PrimaryLiquidationStrategy {
         let available = *free_collateral as i128;
         let tolerance = available / 10;
 
-        let params = Self::extract_collateral_params(Arc::clone(&market_state), &liability, &asset);
+        let params = Self::_extract_collateral_params(Arc::clone(&market_state), &liability, &asset);
 
         let liq_amount = if net_collateral_req <= available {
             liability.collateral_required.unsigned_abs()
         } else {
-            Self::find_max_liq_amount(
+            Self::_find_max_liq_amount(
                 liability.collateral_required.unsigned_abs(),
                 available,
                 tolerance,
                 |size| {
-                    Self::calculate_net_collateral_requirement_with_params(
+                    Self::_calculate_net_collateral_requirement_with_params(
                         size, &liability, &asset, params.0, params.1, params.2, params.3, params.4,
                         params.5, params.6, params.7,
                     )
@@ -3223,7 +3224,7 @@ impl PrimaryLiquidationStrategy {
             return;
         }
 
-        Self::try_liquidate_perp_pnl_for_deposit(
+        Self::_try_liquidate_perp_pnl_for_deposit(
             &self,
             drift,
             subaccount,
@@ -3240,7 +3241,7 @@ impl PrimaryLiquidationStrategy {
         .await;
     }
 
-    async fn try_liquidate_borrow_for_perp_pnl(
+    async fn _try_liquidate_borrow_for_perp_pnl(
         &self,
         drift: &DriftClient,
         subaccount: Pubkey,
@@ -3287,7 +3288,7 @@ impl PrimaryLiquidationStrategy {
             &liquidatee_account,
             asset.market_index,
             liability.market_index,
-            u128::from(liq_amount),
+            u128::from(liq_amount).into(),
             None,
         );
 
@@ -3296,7 +3297,7 @@ impl PrimaryLiquidationStrategy {
         match tx_sender
             .send_tx(
                 tx,
-                TxIntent::LiquidateBorrowForPerpPnl {
+                TxIntent::_LiquidateBorrowForPerpPnl {
                     perp_market_index: asset.market_index,
                     spot_market_index: liability.market_index,
                     liquidatee,
@@ -3324,7 +3325,7 @@ impl PrimaryLiquidationStrategy {
     }
 
     /// Attempt borrow for perp pnl liquidation
-    async fn liquidate_borrow_for_perp_pnl(
+    async fn _liquidate_borrow_for_perp_pnl(
         &self,
         drift: &DriftClient,
         market_state: Arc<RwLock<MarketState>>,
@@ -3338,7 +3339,7 @@ impl PrimaryLiquidationStrategy {
         slot: u64,
         pyth_price_update: Option<PythPriceUpdate>,
     ) {
-        let net_collateral_req = Self::calculate_net_collateral_requirement(
+        let net_collateral_req = Self::_calculate_net_collateral_requirement(
             liability.base_amount.unsigned_abs() as u128,
             &liability,
             &asset,
@@ -3363,17 +3364,17 @@ impl PrimaryLiquidationStrategy {
         let available = *free_collateral as i128;
         let tolerance = available / 10;
 
-        let params = Self::extract_collateral_params(Arc::clone(&market_state), &liability, &asset);
+        let params = Self::_extract_collateral_params(Arc::clone(&market_state), &liability, &asset);
 
         let liq_amount = if net_collateral_req <= available {
             liability.collateral_required.unsigned_abs()
         } else {
-            Self::find_max_liq_amount(
+            Self::_find_max_liq_amount(
                 liability.collateral_required.unsigned_abs(),
                 available,
                 tolerance,
                 |size| {
-                    Self::calculate_net_collateral_requirement_with_params(
+                    Self::_calculate_net_collateral_requirement_with_params(
                         size, &liability, &asset, params.0, params.1, params.2, params.3, params.4,
                         params.5, params.6, params.7,
                     )
@@ -3385,7 +3386,7 @@ impl PrimaryLiquidationStrategy {
             return;
         }
 
-        Self::try_liquidate_borrow_for_perp_pnl(
+        Self::_try_liquidate_borrow_for_perp_pnl(
             &self,
             drift,
             subaccount,
@@ -3403,7 +3404,7 @@ impl PrimaryLiquidationStrategy {
     }
 
     // Settle perp pnl
-    async fn settle_perp_pnl(
+    async fn _settle_perp_pnl(
         drift: &DriftClient,
         subaccount: Pubkey,
         liquidatee: Pubkey,
@@ -3447,8 +3448,8 @@ impl PrimaryLiquidationStrategy {
             .send_tx(
                 tx,
                 TxIntent::SettlePnl {
-                    market_index: market_indexes[0],
-                    subaccount: liquidatee,
+                        _market_index: market_indexes[0],
+                        _subaccount: liquidatee,
                 },
                 cu_limit as u64,
             )
@@ -3587,7 +3588,7 @@ impl LiquidationStrategy for PrimaryLiquidationStrategy {
                 }
                 LiquidationType::PerpPnlForDeposit => {
                     // if let Some(asset) = asset {
-                    //     Self::liquidate_perp_pnl_for_deposit(...)
+                    //     Self::_liquidate_perp_pnl_for_deposit(...)
                     // }
                     LiquidationOutcome::Skipped("perp_pnl_for_deposit_not_implemented")
                 }
