@@ -11,18 +11,19 @@ defaults:
     working-directory: ./keep-rs
 
 env:
-  CARGO_DRIFT_FFI_PATH: /usr/local/lib
-  # `drift-rs` and the `drift` crate (protocol-v2-shadow) are consumed as path
-  # deps on siblings of this repo (see Cargo.toml). These refs pin which
-  # commits CI builds against.
-  DRIFT_RS_REF: next
-  SHADOW_REF: master
+  # `drift-rs`, `drift-ffi-sys` and the `drift` crate (protocol-v2) are
+  # consumed as path-deps / build-deps on siblings of this repo (see
+  # Cargo.toml and drift-rs build.rs). These refs pin which commits CI builds
+  # against.
+  DRIFT_RS_REF: main
+  FFI_REF: master
+  SHADOW_REF: main
 
 jobs:
   build_and_test:
     runs-on: ubicloud
     container: rust:1.91.1
-    timeout-minutes: 10
+    timeout-minutes: 30
     strategy:
       matrix:
         task: ["build", "test"]
@@ -36,39 +37,29 @@ jobs:
       - name: Checkout drift-rs
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: drift-labs/drift-rs
+          repository: ptn611/drift-rs
           ref: ${{ env.DRIFT_RS_REF }}
           path: drift-rs
 
-      - name: Generate protocol-v2-shadow read token
-        id: shadow-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ vars.VELOCITY_SDK_READER_APP_ID }}
-          private-key: ${{ secrets.VELOCITY_SDK_READER_PRIVATE_KEY }}
-          owner: drift-labs
-          repositories: protocol-v2-shadow
-
-      - name: Checkout protocol-v2-shadow
+      - name: Checkout drift-ffi-sys (sibling, built from source by drift-rs build.rs)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: drift-labs/protocol-v2-shadow
+          repository: ptn611/drift-ffi-sys
+          ref: ${{ env.FFI_REF }}
+          path: drift-ffi-sys
+
+      - name: Checkout protocol-v2 (drift crate dep)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ptn611/protocol-v2
           ref: ${{ env.SHADOW_REF }}
-          token: ${{ steps.shadow-token.outputs.token }}
-          path: protocol-v2-shadow
+          path: protocol-v2
 
       - name: Install OS dependencies
         run: apt-get update && apt-get install -y git cmake jq
 
       - name: Install rustfmt and toolchain
         run: rustup component add rustfmt
-
-      - name: Install libdrift_ffi
-        run: |
-          SO_URL=$(curl -s https://api.github.com/repos/velocity-exchange/drift-ffi-sys/releases/latest | jq -r '.assets[] | select(.name=="libdrift_ffi_sys.so") | .browser_download_url')
-          echo "downloading libdrift: $SO_URL"
-          curl -L -o libdrift_ffi_sys.so "$SO_URL"
-          cp libdrift_ffi_sys.so $CARGO_DRIFT_FFI_PATH
 
       - name: Cache cargo index
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

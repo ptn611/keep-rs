@@ -2,8 +2,6 @@
 FROM rust:1.91.1 AS builder
 WORKDIR /app
 
-ENV CARGO_DRIFT_FFI_PATH="/usr/local/lib"
-
 # 1. Cache dependencies first
 RUN apt-get update && apt-get install jq -y && rustup component add rustfmt
 
@@ -11,17 +9,14 @@ RUN apt-get update && apt-get install jq -y && rustup component add rustfmt
 # COPY Cargo.toml Cargo.lock ./
 # RUN mkdir src && echo "fn main() {}" > src/main.rs
 
-# install libdrift
-RUN SO_URL=$(curl -s https://api.github.com/repos/velocity-exchange/drift-ffi-sys/releases/latest | jq -r '.assets[] | select(.name=="libdrift_ffi_sys.so") | .browser_download_url') &&\
-    curl -L -o libdrift_ffi_sys.so "$SO_URL" &&\
-    cp libdrift_ffi_sys.so $CARGO_DRIFT_FFI_PATH
-
 # 2. Copy actual code and build.
-# protocol-v2-shadow (the `drift` crate) and drift-rs are consumed as path-dep
-# siblings of keep-rs. The build context is the parent dir holding all three;
-# CI checks them out side by side (see .github/workflows). Preserve the
-# relative layout so Cargo's `../drift-rs` / `../protocol-v2-shadow` resolve.
-COPY protocol-v2-shadow ./protocol-v2-shadow
+# protocol-v2 (the `drift` crate), drift-rs and drift-ffi-sys are consumed as
+# path-deps / build deps siblings of keep-rs (see Cargo.toml and drift-rs
+# build.rs). The build context is the parent dir holding all of them; preserve
+# the relative layout so Cargo's `../drift-rs`, `../drift-ffi-sys` and
+# `../protocol-v2/programs/drift` resolve.
+COPY protocol-v2 ./protocol-v2
+COPY drift-ffi-sys ./drift-ffi-sys
 COPY drift-rs ./drift-rs
 COPY keep-rs ./keep-rs
 
@@ -32,7 +27,7 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 # RUN apt-get update && apt-get install -y ca-certificates lldb
 RUN apt-get update && apt-get install -y ca-certificates
-COPY --from=builder /usr/local/lib/libdrift_ffi_sys.so /lib/
+COPY --from=builder /app/drift-ffi-sys/target/release/libdrift_ffi_sys.so /lib/
 # COPY --from=builder /app/keep-rs/target/release/keeprs /usr/local/bin/keeprs-real
 COPY --from=builder /app/keep-rs/target/release/keeprs /usr/local/bin/keeprs
 
