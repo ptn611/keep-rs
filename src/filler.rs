@@ -489,6 +489,30 @@ async fn try_swift_fill(
         drift.get_account_value::<UserStats>(&taker_stats)
     )
     .unwrap();
+
+    if taker_order.reduce_only
+        && !matches!(
+            taker_order.order_type,
+            OrderType::TriggerMarket | OrderType::TriggerLimit
+        )
+    {
+        let contradicts = taker_account_data
+            .get_perp_position(taker_order.market_index)
+            .map(|pos| {
+                reduce_only_contradicts_position(taker_order.direction, pos.base_asset_amount)
+            })
+            .unwrap_or(true);
+        if contradicts {
+            log::info!(
+                target: TARGET,
+                "skip swift reduce-only order {} (user={}) that contradicts current position",
+                swift_order.order_uuid_str(),
+                taker_subaccount
+            );
+            return;
+        }
+    }
+
     let tx_builder = TransactionBuilder::new(
         drift.program_data(),
         filler_subaccount,
@@ -546,6 +570,14 @@ async fn try_swift_fill(
             cu_limit as u64,
         )
         .await;
+}
+
+/// Reduce-only pre-check (AGENTS.md §5.2): an order that contradicts the
+/// current position is rejected without being pushed to the contract.
+fn reduce_only_contradicts_position(direction: PositionDirection, position: i64) -> bool {
+    position == 0
+        || (direction == PositionDirection::Long && position > 0)
+        || (direction == PositionDirection::Short && position < 0)
 }
 
 /// Try to fill an auction order
@@ -662,6 +694,35 @@ async fn try_auction_fill(
                 taker_order.order_id,
                 (market_index, MarketType::Perp),
             );
+        }
+
+        if !taker_is_trigger {
+            if let Some(order) = taker_account_data
+                .orders
+                .iter()
+                .find(|o| o.order_id == taker_order.order_id)
+            {
+                if order.reduce_only {
+                    let contradicts = taker_account_data
+                        .get_perp_position(market_index)
+                        .map(|pos| {
+                            reduce_only_contradicts_position(
+                                order.direction,
+                                pos.base_asset_amount,
+                            )
+                        })
+                        .unwrap_or(true);
+                    if contradicts {
+                        log::info!(
+                            target: TARGET,
+                            "skip reduce-only order {} (user={}) that contradicts current position",
+                            taker_order.order_id,
+                            taker_subaccount
+                        );
+                        continue;
+                    }
+                }
+            }
         }
 
         let mut maker_accounts: Vec<User> = crosses
