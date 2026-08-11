@@ -2254,7 +2254,7 @@ impl PrimaryLiquidationStrategy {
             .collect()
     }
 
-    // Port of  https://github.com/drift-labs/protocol-v2/blob/master/sdk/src/user.ts#L3941-L3971
+    // Port of  https://github.com/ptn611/protocol-v2/blob/master/sdk/src/user.ts#L3941-L3971
     fn get_safest_tiers(user_account: &User, drift: &DriftClient) -> (u8, u8) {
         let mut safest_perp_tier = 4;
         let mut safest_spot_tier = 4;
