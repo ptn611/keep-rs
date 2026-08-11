@@ -487,109 +487,109 @@ pub fn subscribe_price_feeds(
                                     let data =
                                         PayloadData::deserialize_slice_le(&solana.payload).unwrap();
 
-                                    log::trace!(target: "pyth", "got update: {data:?}");
-                                    for f in data.feeds {
-                                        for p in f.properties {
-                                            if let PayloadPropertyValue::Price(Some(new_price)) = p
-                                            {
-                                                // TODO: bulk msg to avoid bouncing around tokio, bucket in some way, one message updates multiple markets...
-                                                let feed_id = f.feed_id.0;
-                                                let price: u64 = new_price.0.unsigned_abs().into();
+                    log::trace!(target: "pyth", "got update: {data:?}");
+                    for f in data.feeds {
+                        for p in f.properties {
+                            if let PayloadPropertyValue::Price(Some(new_price)) = p
+                            {
+                                // TODO: bulk msg to avoid bouncing around tokio, bucket in some way, one message updates multiple markets...
+                                let feed_id = f.feed_id.0;
+                                let price: u64 = new_price.0.unsigned_abs().into();
 
-                                                if let Some(market_id) =
-                                                    pyth_lazer_feed_id_to_perp_market_index(feed_id)
-                                                {
-                                                    let scaled_price = to_price_precision(
-                                                        price,
-                                                        feed_id,
-                                                        MarketType::Perp,
-                                                    );
-                                                    let _ = price_tx.try_send(PythPriceUpdate {
-                                                        market_type: MarketType::Perp,
-                                                        market_id,
-                                                        feed_id,
-                                                        price: scaled_price,
-                                                        message: buf.clone(),
-                                                        ts: data.timestamp_us,
-                                                    });
-                                                }
-
-                                                if let Some(market_id) =
-                                                    pyth_lazer_feed_id_to_spot_market_index(feed_id)
-                                                {
-                                                    let scaled_price = to_price_precision(
-                                                        price,
-                                                        feed_id,
-                                                        MarketType::Spot,
-                                                    );
-                                                    let _ = price_tx.try_send(PythPriceUpdate {
-                                                        market_type: MarketType::Spot,
-                                                        market_id,
-                                                        feed_id,
-                                                        price: scaled_price,
-                                                        message: buf.clone(),
-                                                        ts: data.timestamp_us,
-                                                    });
-                                                }
-
-                                                // Extra feeds (cluster-specific): emit a synthetic
-                                                // update so the relayer ships them. drift-rs
-                                                // derives the oracle PDA from feed_id alone, so
-                                                // market_id is informational only.
-                                                if extra_feeds.contains(&feed_id)
-                                                    && pyth_lazer_feed_id_to_perp_market_index(
-                                                        feed_id,
-                                                    )
-                                                    .is_none()
-                                                    && pyth_lazer_feed_id_to_spot_market_index(
-                                                        feed_id,
-                                                    )
-                                                    .is_none()
-                                                {
-                                                    let scaled_price = to_price_precision(
-                                                        price,
-                                                        feed_id,
-                                                        MarketType::Spot,
-                                                    );
-                                                    let _ = price_tx.try_send(PythPriceUpdate {
-                                                        market_type: MarketType::Spot,
-                                                        market_id: u16::MAX,
-                                                        feed_id,
-                                                        price: scaled_price,
-                                                        message: buf.clone(),
-                                                        ts: data.timestamp_us,
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
+                                if let Some(market_id) =
+                                    pyth_lazer_feed_id_to_perp_market_index(feed_id)
+                                {
+                                    let scaled_price = to_price_precision(
+                                        price,
+                                        feed_id,
+                                        MarketType::Perp,
+                                    );
+                                    let _ = price_tx.try_send(PythPriceUpdate {
+                                        market_type: MarketType::Perp,
+                                        market_id,
+                                        feed_id,
+                                        price: scaled_price,
+                                        message: buf.clone(),
+                                        ts: data.timestamp_us,
+                                    });
                                 }
-                                _ => (),
+
+                                if let Some(market_id) =
+                                    pyth_lazer_feed_id_to_spot_market_index(feed_id)
+                                {
+                                    let scaled_price = to_price_precision(
+                                        price,
+                                        feed_id,
+                                        MarketType::Spot,
+                                    );
+                                    let _ = price_tx.try_send(PythPriceUpdate {
+                                        market_type: MarketType::Spot,
+                                        market_id,
+                                        feed_id,
+                                        price: scaled_price,
+                                        message: buf.clone(),
+                                        ts: data.timestamp_us,
+                                    });
+                                }
+
+                                // Extra feeds (cluster-specific): emit a synthetic
+                                // update so the relayer ships them. drift-rs
+                                // derives the oracle PDA from feed_id alone, so
+                                // market_id is informational only.
+                                if extra_feeds.contains(&feed_id)
+                                    && pyth_lazer_feed_id_to_perp_market_index(
+                                        feed_id,
+                                    )
+                                    .is_none()
+                                    && pyth_lazer_feed_id_to_spot_market_index(
+                                        feed_id,
+                                    )
+                                    .is_none()
+                                {
+                                    let scaled_price = to_price_precision(
+                                        price,
+                                        feed_id,
+                                        MarketType::Spot,
+                                    );
+                                    let _ = price_tx.try_send(PythPriceUpdate {
+                                        market_type: MarketType::Spot,
+                                        market_id: u16::MAX,
+                                        feed_id,
+                                        price: scaled_price,
+                                        message: buf.clone(),
+                                        ts: data.timestamp_us,
+                                    });
+                                }
                             }
                         }
                     }
-                    other => match other {
-                        Ok(AnyResponse::Json(Response::Subscribed(sub))) => {
-                            log::info!(
-                                target: "pyth",
-                                "subscribed feed {}",
-                                sub.subscription_id.0
-                            );
-                        }
-                        Ok(AnyResponse::Json(msg)) => {
-                            log::info!(target: "pyth", "control msg: {msg:?}");
-                        }
-                        Err(err) => {
-                            log::warn!(
-                                target: "pyth",
-                                "websocket error from pyth stream: {err:?}"
-                            );
-                        }
-                        Ok(other_ok) => {
-                            log::info!(target: "pyth", "non-binary msg: {other_ok:?}");
-                        }
-                    },
                 }
+                _ => (),
+            }
+        }
+    }
+    other => match other {
+        Ok(AnyResponse::Json(Response::Subscribed(sub))) => {
+            log::info!(
+                target: "pyth",
+                "subscribed feed {}",
+                sub.subscription_id.0
+            );
+        }
+        Ok(AnyResponse::Json(msg)) => {
+            log::info!(target: "pyth", "control msg: {msg:?}");
+        }
+        Err(err) => {
+            log::warn!(
+                target: "pyth",
+                "websocket error from pyth stream: {err:?}"
+            );
+        }
+        Ok(other_ok) => {
+            log::info!(target: "pyth", "non-binary msg: {other_ok:?}");
+        }
+    },
+}
             }
             // stream ended, will retry
             retries += 1;
@@ -610,4 +610,219 @@ pub fn subscribe_price_feeds(
     });
 
     price_rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_price_precision_scales_per_feed_and_market() {
+        // LAZER_1M feed: perp 10^-6 -> 10^-6 * 1M, spot 10^-10 -> 10^-6
+        assert_eq!(to_price_precision(100, 9, MarketType::Perp), 10_000);
+        assert_eq!(to_price_precision(1_000_000, 9, MarketType::Perp), 100_000_000);
+        assert_eq!(to_price_precision(1_000_000, 9, MarketType::Spot), 100);
+        assert_eq!(to_price_precision(10_000, 9, MarketType::Spot), 1);
+
+        // feed 4: always *100 (10^-8 -> 10^-6 * 1M)
+        assert_eq!(to_price_precision(100, 4, MarketType::Perp), 10_000);
+        assert_eq!(to_price_precision(100, 4, MarketType::Spot), 10_000);
+
+        // LAZER_1K feeds: perp 10^-5 -> 10^-6 * 1K, spot 10^-8 -> 10^-6
+        for feed_id in [1578u32, 2396, 137] {
+            assert_eq!(to_price_precision(100, feed_id, MarketType::Perp), 1_000);
+            assert_eq!(to_price_precision(1_000_000, feed_id, MarketType::Spot), 10_000);
+        }
+
+        // default feed: 10^-8 -> 10^-6
+        assert_eq!(to_price_precision(100, 999, MarketType::Perp), 1);
+        assert_eq!(to_price_precision(1_000_000, 999, MarketType::Spot), 10_000);
+        assert_eq!(to_price_precision(1_000_000, 999, MarketType::Perp), 10_000);
+
+        // zero price
+        assert_eq!(to_price_precision(0, 9, MarketType::Perp), 0);
+        assert_eq!(to_price_precision(0, 999, MarketType::Spot), 0);
+    }
+
+    #[test]
+    fn fixed_rate_maps_feeds_to_intervals() {
+        assert_eq!(fixed_rate(1).value_ms(), FixedRate::MIN.value_ms());
+        assert_eq!(fixed_rate(2).value_ms(), FixedRate::MIN.value_ms());
+        assert_eq!(fixed_rate(6).value_ms(), FixedRate::MIN.value_ms());
+        assert_eq!(fixed_rate(10).value_ms(), 50);
+        assert_eq!(fixed_rate(11).value_ms(), 200);
+        assert_eq!(fixed_rate(999).value_ms(), 200);
+    }
+
+    #[test]
+    fn order_slot_limiter_allows_first_event_in_generation() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 7));
+    }
+
+    #[test]
+    fn order_slot_limiter_rejects_duplicate_in_same_generation() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 7));
+        assert!(!limiter.allow_event(10, 7));
+    }
+
+    #[test]
+    fn order_slot_limiter_rejects_ids_from_g2_to_g4() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 7));
+        // g-2: rejected
+        assert!(!limiter.allow_event(12, 7));
+        // g-3: rejected
+        assert!(!limiter.allow_event(13, 7));
+        // g-4: rejected
+        assert!(!limiter.allow_event(14, 7));
+    }
+
+    #[test]
+    fn order_slot_limiter_allows_id_from_previous_generation_gap() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 7));
+        // g-1 is NOT checked by allow_event (only g-2..=g-4)
+        assert!(limiter.allow_event(11, 7));
+    }
+
+    #[test]
+    fn order_slot_limiter_reallows_after_past_window() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 7));
+        // g-5 = 10, outside the g-2..=g-4 window
+        assert!(limiter.allow_event(15, 7));
+    }
+
+    #[test]
+    fn order_slot_limiter_check_event_includes_g1() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 7));
+        assert!(!limiter._check_event(11, 7));
+        assert!(limiter._check_event(15, 7));
+    }
+
+    #[test]
+    fn order_slot_limiter_wraps_after_n_generations() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(0, 7));
+        // 40 generations later the same bucket is recycled, generation is
+        // replaced, and the old id is forgotten.
+        assert!(limiter.allow_event(40, 7));
+        // A distinct generation in the same bucket then stores its own ids.
+        assert!(limiter.allow_event(80, 8));
+        assert!(!limiter.allow_event(80, 8));
+    }
+
+    #[test]
+    fn order_slot_limiter_distinct_ids_in_same_generation() {
+        let mut limiter = OrderSlotLimiter::<40>::new();
+        assert!(limiter.allow_event(10, 1));
+        assert!(limiter.allow_event(10, 2));
+        assert!(limiter.allow_event(10, 3));
+    }
+
+    #[test]
+    fn pending_txs_fifo_confirm() {
+        let mut pending = PendingTxs::<4>::new();
+        let sigs: Vec<Signature> = (0..3).map(|_| Signature::new_unique()).collect();
+        for (i, sig) in sigs.iter().enumerate() {
+            pending.insert(PendingTxMeta::new(*sig, TxIntent::None, i as u64 + 1));
+        }
+        for (i, sig) in sigs.iter().enumerate() {
+            let meta = pending.confirm(sig).expect("present");
+            assert_eq!(meta.cu_limit, i as u64 + 1);
+        }
+    }
+
+    #[test]
+    fn pending_txs_confirm_missing_returns_none() {
+        let mut pending = PendingTxs::<4>::new();
+        assert!(pending.confirm(&Signature::new_unique()).is_none());
+    }
+
+    #[test]
+    fn pending_txs_overwrites_oldest_when_full() {
+        let mut pending = PendingTxs::<4>::new();
+        let sigs: Vec<Signature> = (0..5).map(|_| Signature::new_unique()).collect();
+        for sig in &sigs {
+            pending.insert(PendingTxMeta::new(*sig, TxIntent::None, 0));
+        }
+        // size stays capped at N
+        assert!(pending.confirm(&sigs[0]).is_none()); // overwritten
+        for sig in &sigs[1..] {
+            assert!(pending.confirm(sig).is_some());
+        }
+    }
+
+    #[test]
+    fn pending_txs_confirm_does_not_remove() {
+        let mut pending = PendingTxs::<4>::new();
+        let sig = Signature::new_unique();
+        pending.insert(PendingTxMeta::new(sig, TxIntent::None, 0));
+        assert!(pending.confirm(&sig).is_some());
+        assert!(pending.confirm(&sig).is_some());
+    }
+
+    fn crosses(has_vamm: bool) -> MakerCrosses {
+        MakerCrosses {
+            has_vamm_cross: has_vamm,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tx_intent_label_mapping() {
+        assert_eq!(TxIntent::None.label(), "none");
+        assert_eq!(TxIntent::LimitUncross { slot: 1, _market_index: 0, _taker_order_id: 0, _maker_order_id: 0 }.label(), "limit_uncross");
+        assert_eq!(TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: false, maker_crosses: crosses(false) }.label(), "auction_fill");
+        assert_eq!(TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: false, maker_crosses: crosses(true) }.label(), "auction_fill_vamm");
+        assert_eq!(TxIntent::LiquidateWithFill { _market_index: 0, liquidatee: Pubkey::default(), slot: 0 }.label(), "liq_with_fill");
+        assert_eq!(TxIntent::LiquidatePerp { _market_index: 0, liquidatee: Pubkey::default(), slot: 0 }.label(), "liq_perp");
+        assert_eq!(TxIntent::LiquidateSpot { _asset_market_index: 0, _liability_market_index: 0, liquidatee: Pubkey::default(), slot: 0 }.label(), "liq_spot");
+        assert_eq!(TxIntent::Derisk { _market_index: 0, _subaccount: Pubkey::default() }.label(), "derisk");
+        assert_eq!(TxIntent::SettlePnl { _market_index: 0, _subaccount: Pubkey::default() }.label(), "settle_pnl");
+
+        // NOTE: suspected bug — SwiftFill labels appear inverted vs AuctionFill:
+        // with a VAMM cross the label is "swift_fill" and without it is
+        // "swift_fill_vamm". Tests assert current (as-written) behaviour.
+        assert_eq!(TxIntent::SwiftFill { maker_crosses: crosses(false) }.label(), "swift_fill_vamm");
+        assert_eq!(TxIntent::SwiftFill { maker_crosses: crosses(true) }.label(), "swift_fill");
+    }
+
+    #[test]
+    fn tx_intent_expected_fill_count() {
+        assert_eq!(TxIntent::None.expected_fill_count(), 0);
+        assert_eq!(TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: false, maker_crosses: crosses(false) }.expected_fill_count(), 0);
+        assert_eq!(TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: false, maker_crosses: crosses(true) }.expected_fill_count(), 1);
+        assert_eq!(TxIntent::SwiftFill { maker_crosses: crosses(true) }.expected_fill_count(), 1);
+        assert_eq!(TxIntent::LimitUncross { slot: 1, _market_index: 0, _taker_order_id: 0, _maker_order_id: 0 }.expected_fill_count(), 1);
+        assert_eq!(TxIntent::LiquidateWithFill { _market_index: 0, liquidatee: Pubkey::default(), slot: 0 }.expected_fill_count(), 1);
+        assert_eq!(TxIntent::LiquidatePerp { _market_index: 0, liquidatee: Pubkey::default(), slot: 0 }.expected_fill_count(), 0);
+        assert_eq!(TxIntent::LiquidateSpot { _asset_market_index: 0, _liability_market_index: 0, liquidatee: Pubkey::default(), slot: 0 }.expected_fill_count(), 0);
+        assert_eq!(TxIntent::Derisk { _market_index: 0, _subaccount: Pubkey::default() }.expected_fill_count(), 0);
+    }
+
+    #[test]
+    fn tx_intent_expected_trigger() {
+        let t = TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: true, maker_crosses: crosses(false) };
+        assert!(t.expected_trigger());
+        let t = TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: false, maker_crosses: crosses(false) };
+        assert!(!t.expected_trigger());
+        assert!(!TxIntent::LimitUncross { slot: 1, _market_index: 0, _taker_order_id: 0, _maker_order_id: 0 }.expected_trigger());
+    }
+
+    #[test]
+    fn tx_intent_slot_liquidatee_and_is_liquidation() {
+        let pk = Pubkey::new_unique();
+        assert_eq!(TxIntent::None.slot(), None);
+        assert_eq!(TxIntent::LimitUncross { slot: 42, _market_index: 0, _taker_order_id: 0, _maker_order_id: 0 }.slot(), Some(42));
+        assert_eq!(TxIntent::LiquidateSpot { _asset_market_index: 0, _liability_market_index: 1, liquidatee: pk, slot: 7 }.slot(), Some(7));
+        assert_eq!(TxIntent::LiquidateSpot { _asset_market_index: 0, _liability_market_index: 1, liquidatee: pk, slot: 7 }.liquidatee(), Some(pk));
+        assert!(TxIntent::LiquidateWithFill { _market_index: 0, liquidatee: pk, slot: 0 }.is_liquidation());
+        assert!(TxIntent::LiquidateSpot { _asset_market_index: 0, _liability_market_index: 1, liquidatee: pk, slot: 0 }.is_liquidation());
+        assert!(!TxIntent::AuctionFill { _taker_order_id: 0, has_trigger: false, maker_crosses: crosses(false) }.is_liquidation());
+        assert!(!TxIntent::None.is_liquidation());
+    }
 }

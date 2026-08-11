@@ -522,3 +522,118 @@ fn _assert_tick(t: u64) -> u64 {
     debug_assert!(t > 0);
     t
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use drift_rs::types::Order;
+
+    fn user_with_order(order: Order) -> User {
+        let mut orders = [Order::default(); 32];
+        orders[0] = order;
+        User { orders, ..Default::default() }
+    }
+
+    fn resting_order(price: u64, filled: u64, total: u64) -> Order {
+        Order {
+            market_index: 0,
+            market_type: MarketType::Perp,
+            user_order_id: USER_ORDER_ID_BID,
+            base_asset_amount: total,
+            base_asset_amount_filled: filled,
+            price,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn evaluate_side_no_existing_order_needs_placement() {
+        let user = User::default();
+        let (needed, replace) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 100, 100, 10);
+        assert_eq!((needed, replace), (true, false));
+    }
+
+    #[test]
+    fn evaluate_side_within_refresh_bps_noop() {
+        let user = user_with_order(resting_order(100, 0, 100));
+        // target 100, oracle 1000, refresh 10bps -> threshold 1; drift 0 <= 1
+        let (needed, replace) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 100, 1000, 10);
+        assert_eq!((needed, replace), (false, false));
+    }
+
+    #[test]
+    fn evaluate_side_beyond_refresh_bps_replaces() {
+        let user = user_with_order(resting_order(100, 0, 100));
+        // target 105, drift 5 > threshold 1 -> replace
+        let (needed, replace) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 105, 1000, 10);
+        assert_eq!((needed, replace), (true, true));
+    }
+
+    #[test]
+    fn evaluate_side_zero_refresh_bps_replaces_on_any_drift() {
+        let user = user_with_order(resting_order(100, 0, 100));
+        // refresh_bps = 0 -> threshold 0, any positive drift replaces
+        let (_, replace) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 101, 1000, 0);
+        assert!(replace);
+        let (_, replace) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 100, 1000, 0);
+        assert!(!replace);
+    }
+
+    #[test]
+    fn evaluate_side_fully_filled_order_ignored() {
+        let user = user_with_order(resting_order(100, 100, 100));
+        let (needed, replace) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 100, 1000, 10);
+        assert_eq!((needed, replace), (true, false));
+    }
+
+    #[test]
+    fn evaluate_side_ignores_other_markets_and_side() {
+        let mut orders = [Order::default(); 32];
+        orders[0] = Order {
+            market_index: 1,
+            market_type: MarketType::Perp,
+            user_order_id: USER_ORDER_ID_BID,
+            base_asset_amount: 100,
+            price: 100,
+            ..Default::default()
+        };
+        let user = User { orders, ..Default::default() };
+        let (needed, _) = evaluate_side(&user, 0, USER_ORDER_ID_BID, 100, 1000, 10);
+        assert!(needed);
+    }
+
+    #[test]
+    fn notional_abs_converts_to_quote_precision() {
+        // 1 base unit (1e9) at 1 quote unit (1e6) = 1 QUOTE_PRECISION (1e6)
+        assert_eq!(notional_abs(1_000_000_000, 1_000_000), 1_000_000);
+        // 2 base units at $100 = $200
+        assert_eq!(notional_abs(2_000_000_000, 100_000_000), 200_000_000);
+        // negative base uses abs
+        assert_eq!(notional_abs(-1_000_000_000, 1_000_000), 1_000_000);
+        assert_eq!(notional_abs(0, 1_000_000), 0);
+    }
+
+    #[test]
+    fn notional_abs_saturates_on_overflow() {
+        assert_eq!(
+            notional_abs(i64::MAX, u64::MAX),
+            (i64::MAX as u128).saturating_mul(u64::MAX as u128) / BASE_PRECISION_U64 as u128
+        );
+    }
+
+    #[test]
+    fn find_position_matches_market_index() {
+        let mut perp_positions = [PerpPosition::default(); 8];
+        perp_positions[2] = PerpPosition {
+            market_index: 2,
+            base_asset_amount: 100,
+            ..Default::default()
+        };
+        let user = User { perp_positions, ..Default::default() };
+        assert_eq!(find_position(&user, 2).map(|p| p.market_index), Some(2));
+        assert!(find_position(&user, 3).is_none());
+        // default User has an empty PerpPosition at market_index 0, so 0 matches
+        assert!(find_position(&User::default(), 0).is_some());
+        assert!(find_position(&User::default(), 5).is_none());
+    }
+}

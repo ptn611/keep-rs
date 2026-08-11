@@ -347,3 +347,66 @@ pub async fn dashboard_api_handler(State(state): State<AppState>) -> impl IntoRe
 pub async fn dashboard_handler() -> Html<&'static str> {
     Html(include_str!("../static/dashboard.html"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(cross: MarginStatus, isolated: Vec<(u16, MarginStatus)>) -> UserMarginStatus {
+        UserMarginStatus { cross, isolated }
+    }
+
+    #[test]
+    fn margin_status_is_liquidatable_cross() {
+        let s = status(MarginStatus::Liquidatable, vec![]);
+        assert!(s.is_liquidatable());
+        assert!(s.is_at_risk());
+    }
+
+    #[test]
+    fn margin_status_is_liquidatable_isolated() {
+        let s = status(MarginStatus::Safe, vec![(0, MarginStatus::Liquidatable)]);
+        assert!(s.is_liquidatable());
+        assert!(s.is_at_risk());
+    }
+
+    #[test]
+    fn margin_status_high_risk_not_liquidatable() {
+        let s = status(MarginStatus::HighRisk, vec![]);
+        assert!(!s.is_liquidatable());
+        assert!(s.is_at_risk());
+    }
+
+    #[test]
+    fn margin_status_safe_isolated_high_risk() {
+        let s = status(MarginStatus::Safe, vec![(1, MarginStatus::HighRisk)]);
+        assert!(!s.is_liquidatable());
+        assert!(s.is_at_risk());
+    }
+
+    #[test]
+    fn margin_status_safe() {
+        let s = status(MarginStatus::Safe, vec![]);
+        assert!(!s.is_liquidatable());
+        assert!(!s.is_at_risk());
+    }
+
+    #[test]
+    fn margin_status_serializes_camel_case() {
+        let s = status(MarginStatus::Liquidatable, vec![(0, MarginStatus::HighRisk)]);
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["cross"], "liquidatable");
+        assert_eq!(json["isolated"][0][1], "highRisk");
+        assert_eq!(serde_json::to_value(MarginStatus::Safe).unwrap(), "safe");
+    }
+
+    #[test]
+    fn margin_status_deserializes_camel_case() {
+        let s: UserMarginStatus =
+            serde_json::from_str(r#"{"cross":"highRisk","isolated":[[0,"liquidatable"]]}"#)
+                .unwrap();
+        assert_eq!(s.cross, MarginStatus::HighRisk);
+        assert_eq!(s.isolated, vec![(0, MarginStatus::Liquidatable)]);
+        assert!(s.is_liquidatable());
+    }
+}

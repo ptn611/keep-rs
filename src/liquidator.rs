@@ -3604,3 +3604,358 @@ impl LiquidationStrategy for PrimaryLiquidationStrategy {
         .boxed()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::PythPriceUpdate;
+    use drift_rs::ffi::IsolatedMarginCalculation;
+    use pyth_lazer_protocol::router::TimestampUs;
+
+    fn margin_calc(total_collateral: i128, margin_requirement: u128) -> SimplifiedMarginCalculation {
+        SimplifiedMarginCalculation {
+            total_collateral,
+            total_collateral_buffer: 0,
+            margin_requirement,
+            margin_requirement_plus_buffer: 0,
+            isolated_margin_calculations: [IsolatedMarginCalculation::default(); 8],
+            with_perp_isolated_liability: false,
+            with_spot_isolated_liability: false,
+        }
+    }
+
+    fn iso(market_index: u16, total_collateral: i128, margin_requirement: u128) -> IsolatedMarginCalculation {
+        IsolatedMarginCalculation {
+            margin_requirement,
+            total_collateral,
+            market_index,
+            ..Default::default()
+        }
+    }
+
+    fn margin_calc_with_iso(total_collateral: i128, margin_requirement: u128, isolated: [IsolatedMarginCalculation; 8]) -> SimplifiedMarginCalculation {
+        SimplifiedMarginCalculation {
+            total_collateral,
+            total_collateral_buffer: 0,
+            margin_requirement,
+            margin_requirement_plus_buffer: 0,
+            isolated_margin_calculations: isolated,
+            with_perp_isolated_liability: false,
+            with_spot_isolated_liability: false,
+        }
+    }
+
+    // ---- LiquidationAttemptTracker ----
+
+    #[test]
+    fn tracker_new_starts_clean() {
+        let t = LiquidationAttemptTracker::new(10);
+        assert_eq!(t.consecutive_failures, 0);
+        assert_eq!(t.last_attempt_slot, 10);
+        assert_eq!(t.cooldown_ms(), 0);
+    }
+
+    #[test]
+    fn tracker_cooldown_exponential_backoff_capped() {
+        let mut t = LiquidationAttemptTracker::new(0);
+        assert_eq!(t.cooldown_ms(), 0);
+        t.record_attempt(0);
+        assert_eq!(t.cooldown_ms(), 5_000);
+        t.record_attempt(0);
+        assert_eq!(t.cooldown_ms(), 10_000);
+        t.record_attempt(0);
+        assert_eq!(t.cooldown_ms(), 20_000);
+        // cap at FAILURE_COOLDOWN_MAX_MS (5 min)
+        t.consecutive_failures = 20;
+        assert_eq!(t.cooldown_ms(), FAILURE_COOLDOWN_MAX_MS);
+    }
+
+    #[test]
+    fn tracker_is_cooled_down_compares_last_attempt() {
+        let mut t = LiquidationAttemptTracker::new(0);
+        t.last_attempt_ms = 10_000;
+        t.consecutive_failures = 1; // cooldown 5s
+        assert!(!t.is_cooled_down(10_000));
+        assert!(!t.is_cooled_down(14_999));
+        assert!(t.is_cooled_down(15_000));
+        // no failures -> always cooled down
+        t.consecutive_failures = 0;
+        assert!(t.is_cooled_down(10_000));
+    }
+
+    #[test]
+    fn tracker_record_and_reset() {
+        let mut t = LiquidationAttemptTracker::new(5);
+        t.record_attempt(9);
+        assert_eq!(t.last_attempt_slot, 9);
+        assert_eq!(t.consecutive_failures, 1);
+        t.reset();
+        assert_eq!(t.consecutive_failures, 0);
+    }
+
+    // ---- Freshness validation ----
+
+    fn pyth_update(ts_us: u64) -> PythPriceUpdate {
+        PythPriceUpdate {
+            market_type: MarketType::Perp,
+            market_id: 0,
+            feed_id: 1,
+            price: 1_000_000,
+            message: Vec::new(),
+            ts: TimestampUs(ts_us),
+        }
+    }
+
+    #[test]
+    fn pyth_price_freshness_accepts_recent() {
+        let now_us = current_time_millis() * 1000;
+        let update = pyth_update(now_us.saturating_sub(1000));
+        assert!(validate_pyth_price_freshness(&update).is_ok());
+    }
+
+    #[test]
+    fn pyth_price_freshness_rejects_stale() {
+        let now_us = current_time_millis() * 1000;
+        let update = pyth_update(now_us.saturating_sub(10_000_000)); // 10s old
+        assert!(matches!(
+            validate_pyth_price_freshness(&update),
+            Err(StalenessError::PythPriceStale { .. })
+        ));
+    }
+
+    fn user_with_perp_position(market_index: u16, base: i64) -> User {
+        let mut perp_positions = [PerpPosition::default(); 8];
+        perp_positions[0] = PerpPosition {
+            market_index,
+            base_asset_amount: base,
+            ..Default::default()
+        };
+        User { perp_positions, ..Default::default() }
+    }
+
+    #[test]
+    fn freshness_rejects_stale_user_account() {
+        let user = user_with_perp_position(0, 100);
+        let user_meta = UserAccountMetadata {
+            user,
+            last_updated_slot: 0,
+            _last_updated_timestamp_ms: 0,
+        };
+        assert!(matches!(
+            validate_data_freshness(&user_meta, &HashMap::new(), 500),
+            Err(StalenessError::UserAccountStale { .. })
+        ));
+    }
+
+    #[test]
+    fn freshness_rejects_stale_oracle_for_position_market() {
+        let user = user_with_perp_position(0, 100);
+        let user_meta = UserAccountMetadata {
+            user,
+            last_updated_slot: 500,
+            _last_updated_timestamp_ms: 0,
+        };
+        let mut oracles = HashMap::new();
+        oracles.insert(
+            MarketId::perp(0),
+            OraclePriceMetadata {
+                _price_data: OraclePriceData::default(),
+                last_updated_slot: 0,
+                _last_updated_timestamp_ms: 0,
+            },
+        );
+        assert!(matches!(
+            validate_data_freshness(&user_meta, &oracles, 500),
+            Err(StalenessError::OraclePriceStale { .. })
+        ));
+    }
+
+    #[test]
+    fn freshness_ok_when_fresh() {
+        let user = user_with_perp_position(0, 100);
+        let user_meta = UserAccountMetadata {
+            user,
+            last_updated_slot: 500,
+            _last_updated_timestamp_ms: 0,
+        };
+        let mut oracles = HashMap::new();
+        oracles.insert(
+            MarketId::perp(0),
+            OraclePriceMetadata {
+                _price_data: OraclePriceData::default(),
+                last_updated_slot: 480,
+                _last_updated_timestamp_ms: 0,
+            },
+        );
+        assert!(validate_data_freshness(&user_meta, &oracles, 500).is_ok());
+    }
+
+    #[test]
+    fn freshness_missing_oracle_not_an_error() {
+        let user = user_with_perp_position(0, 100);
+        let user_meta = UserAccountMetadata {
+            user,
+            last_updated_slot: 500,
+            _last_updated_timestamp_ms: 0,
+        };
+        // oracle map is empty: markets without a cached oracle are skipped
+        assert!(validate_data_freshness(&user_meta, &HashMap::new(), 500).is_ok());
+    }
+
+    // ---- check_margin_status ----
+
+    #[test]
+    fn margin_status_safe_when_healthy() {
+        let status = check_margin_status(&margin_calc(200, 100));
+        assert_eq!(status.cross, MarginStatus::Safe);
+        assert!(status.isolated.is_empty());
+        assert!(!status.is_liquidatable());
+    }
+
+    #[test]
+    fn margin_status_liquidatable_cross() {
+        let status = check_margin_status(&margin_calc(99, 100));
+        assert_eq!(status.cross, MarginStatus::Liquidatable);
+        assert!(status.is_liquidatable());
+    }
+
+    #[test]
+    fn margin_status_high_risk_cross_ratio_boundary() {
+        // free/req = 0.10 -> exactly at HIGH_RISK_FREE_MARGIN_RATIO -> Safe
+        let status = check_margin_status(&margin_calc(110, 100));
+        assert_eq!(status.cross, MarginStatus::Safe);
+        // free/req = 0.05 -> HighRisk
+        let status = check_margin_status(&margin_calc(105, 100));
+        assert_eq!(status.cross, MarginStatus::HighRisk);
+        assert!(!status.is_liquidatable());
+    }
+
+    #[test]
+    fn margin_status_zero_requirement_is_safe() {
+        let status = check_margin_status(&margin_calc(100, 0));
+        assert_eq!(status.cross, MarginStatus::Safe);
+    }
+
+    #[test]
+    fn margin_status_isolated_liquidatable() {
+        let mut iso_arr = [IsolatedMarginCalculation::default(); 8];
+        iso_arr[0] = iso(3, 50, 100);
+        let status = check_margin_status(&margin_calc_with_iso(200, 100, iso_arr));
+        assert_eq!(status.cross, MarginStatus::Safe);
+        assert_eq!(status.isolated, vec![(3, MarginStatus::Liquidatable)]);
+        assert!(status.is_liquidatable());
+    }
+
+    #[test]
+    fn margin_status_isolated_high_risk() {
+        let mut iso_arr = [IsolatedMarginCalculation::default(); 8];
+        iso_arr[0] = iso(3, 105, 100);
+        let status = check_margin_status(&margin_calc_with_iso(200, 100, iso_arr));
+        assert_eq!(status.isolated, vec![(3, MarginStatus::HighRisk)]);
+        assert!(!status.is_liquidatable());
+        assert!(status.is_at_risk());
+    }
+
+    #[test]
+    fn margin_status_isolated_skips_empty_and_negative() {
+        let mut iso_arr = [IsolatedMarginCalculation::default(); 8];
+        iso_arr[0] = iso(3, 0, 0); // empty -> skipped
+        iso_arr[1] = iso(4, -5, 10); // non-positive collateral -> skipped
+        iso_arr[2] = iso(5, 60, 100); // liquidatable
+        let status = check_margin_status(&margin_calc_with_iso(200, 100, iso_arr));
+        assert_eq!(status.isolated, vec![(5, MarginStatus::Liquidatable)]);
+    }
+
+    // ---- _find_max_liq_amount ----
+
+    #[test]
+    fn find_max_liq_full_amount_when_collateral_sufficient() {
+        let max = PrimaryLiquidationStrategy::_find_max_liq_amount(1000, 100_000, 0, |x| x as i128);
+        assert_eq!(max, 1000);
+    }
+
+    #[test]
+    fn find_max_liq_scales_down_to_fit() {
+        let max = PrimaryLiquidationStrategy::_find_max_liq_amount(1000, 100, 0, |x| x as i128);
+        // binary search terminates at a mid whose impact fits within available collateral
+        assert!(max > 0 && (max as i128) <= 100);
+    }
+
+    #[test]
+    fn find_max_liq_zero_when_nothing_fits() {
+        let max = PrimaryLiquidationStrategy::_find_max_liq_amount(1000, -50, 0, |x| x as i128);
+        assert_eq!(max, 0);
+        let max = PrimaryLiquidationStrategy::_find_max_liq_amount(0, 100, 0, |x| x as i128);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn find_max_liq_respects_tolerance() {
+        let max = PrimaryLiquidationStrategy::_find_max_liq_amount(1000, 100, 10, |x| x as i128);
+        // stops at first mid whose collateral impact is within 10 of available
+        assert!(max >= 90 && max <= 100);
+    }
+
+    // ---- decide_liquidation_type ----
+
+    fn pos(market_type: MarketType, market_index: u16, is_asset: bool) -> PositionInfo {
+        PositionInfo {
+            market_type,
+            market_index,
+            is_asset,
+            collateral_required: 0,
+            base_amount: 0,
+            quote_amount: 0,
+        }
+    }
+
+    #[test]
+    fn decide_liq_type_pnl_only() {
+        let l = pos(MarketType::Perp, 0, false);
+        assert!(matches!(
+            PrimaryLiquidationStrategy::decide_liquidation_type(&l, None, true),
+            LiquidationType::SettlePnl
+        ));
+    }
+
+    #[test]
+    fn decide_liq_type_combos() {
+        let perp_liab = pos(MarketType::Perp, 0, false);
+        let spot_liab = pos(MarketType::Spot, 1, false);
+        let spot_asset = pos(MarketType::Spot, 2, true);
+        let perp_asset = pos(MarketType::Perp, 3, true);
+
+        assert!(matches!(
+            PrimaryLiquidationStrategy::decide_liquidation_type(&perp_liab, None, false),
+            LiquidationType::PerpTakeover
+        ));
+        assert!(matches!(
+            PrimaryLiquidationStrategy::decide_liquidation_type(&perp_liab, Some(&spot_asset), false),
+            LiquidationType::PerpPnlForDeposit
+        ));
+        assert!(matches!(
+            PrimaryLiquidationStrategy::decide_liquidation_type(&spot_liab, Some(&perp_asset), false),
+            LiquidationType::BorrowForPerpPnl
+        ));
+        assert!(matches!(
+            PrimaryLiquidationStrategy::decide_liquidation_type(&spot_liab, Some(&spot_asset), false),
+            LiquidationType::SpotForSpot
+        ));
+        // perp liability + perp asset has no supported method
+        assert!(matches!(
+            PrimaryLiquidationStrategy::decide_liquidation_type(&perp_liab, Some(&perp_asset), false),
+            LiquidationType::Skip
+        ));
+    }
+
+    // ---- LiquidationOutcome ----
+
+    #[test]
+    fn liquidation_outcome_is_sent_and_reason() {
+        assert!(LiquidationOutcome::TxSent.is_sent());
+        assert_eq!(LiquidationOutcome::TxSent.reason(), "sent");
+        let skipped = LiquidationOutcome::Skipped("no_makers");
+        assert!(!skipped.is_sent());
+        assert_eq!(skipped.reason(), "no_makers");
+    }
+}

@@ -1485,3 +1485,54 @@ impl TxSender {
         Some(sig)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn amm(base_asset_amount_with_amm: i128, amm_jit_intensity: u8) -> AMM {
+        AMM {
+            base_asset_amount_with_amm: base_asset_amount_with_amm.into(),
+            amm_jit_intensity,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn amm_wants_to_jit_make_long_when_short_inventory() {
+        // AMM is short (negative base) beyond one step size -> wants to make on longs
+        assert!(amm_wants_to_jit_make(&amm(-101, 1), 100, PositionDirection::Long));
+        assert!(amm_wants_to_jit_make(&amm(-100_000, 1), 100, PositionDirection::Long));
+    }
+
+    #[test]
+    fn amm_wants_to_jit_make_long_boundary_exclusive() {
+        // base == -step_size is NOT enough (strict <)
+        assert!(!amm_wants_to_jit_make(&amm(-100, 1), 100, PositionDirection::Long));
+        assert!(!amm_wants_to_jit_make(&amm(-99, 1), 100, PositionDirection::Long));
+    }
+
+    #[test]
+    fn amm_wants_to_jit_make_long_flat_or_long_inventory() {
+        assert!(!amm_wants_to_jit_make(&amm(0, 1), 100, PositionDirection::Long));
+        assert!(!amm_wants_to_jit_make(&amm(50, 1), 100, PositionDirection::Long));
+    }
+
+    #[test]
+    fn amm_wants_to_jit_make_short_when_long_inventory() {
+        assert!(amm_wants_to_jit_make(&amm(101, 1), 100, PositionDirection::Short));
+        assert!(!amm_wants_to_jit_make(&amm(100, 1), 100, PositionDirection::Short));
+        assert!(!amm_wants_to_jit_make(&amm(0, 1), 100, PositionDirection::Short));
+        assert!(!amm_wants_to_jit_make(&amm(-101, 1), 100, PositionDirection::Short));
+    }
+
+    #[test]
+    fn amm_wants_to_jit_make_requires_intensity() {
+        // amm_jit_intensity == 0 always disables
+        assert!(!amm_wants_to_jit_make(&amm(-101, 0), 100, PositionDirection::Long));
+        assert!(!amm_wants_to_jit_make(&amm(101, 0), 100, PositionDirection::Short));
+        // uses the passed order_step_size, not the AMM's own field
+        assert!(amm_wants_to_jit_make(&amm(-101, 1), 100, PositionDirection::Long));
+        assert!(!amm_wants_to_jit_make(&amm(-101, 1), 200, PositionDirection::Long));
+    }
+}
